@@ -1,0 +1,47 @@
+name: gis_attendance
+description: GIS Staff Attendance System
+publish_to: 'none'
+version: 1.0.0
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  http: ^1.2.2
+  flutter_secure_storage: ^9.2.2
+  geolocator: ^10.1.0
+  local_auth: ^2.3.0
+  image_picker:
+  shared_preferences:
+  google_mlkit_face_detection: ^0.13.2
+  google_mlkit_commons: ^0.11.1
+  path_provider: ^2.1.1
+  provider: ^6.1.5+1
+  device_preview: ^1.2.0
+  flutter_dotenv: ^6.0.0 # Add this line
+  file_picker: ^8.0.0
+  flutter_local_notifications: ^17.1.0
+  webview_flutter: ^4.7.0
+  camera: ^0.11.0+2
+  supabase_flutter: ^2.9.1
+  permission_handler: ^11.3.1
+  # Used directly by attendance_history_screen.dart (DateFormat) — was
+  # previously resolving only as a transitive dep of other packages, so
+  # it worked by luck rather than by being declared.
+  intl: ^0.20.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/default_avatar.png
+    - .env
+
+#No fragment activity Local Auth plugin require activity to be a FragmentActivity , null, null
+#
