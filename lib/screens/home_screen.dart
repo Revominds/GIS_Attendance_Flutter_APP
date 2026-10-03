@@ -1086,7 +1086,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(width: 10),
               const Expanded(
                 child: Text(
-                  "Ghana Immigration Attendance System - Kotoka Terminal 1",
+                  "Ghana Immigration Attendance System - Kotoka Terminal 3",
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, height: 1.2),

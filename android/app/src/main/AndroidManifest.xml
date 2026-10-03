@@ -1,24 +1,4 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-    <!-- Camera permission -->
-    <uses-permission android:name="android.permission.CAMERA"/>
-
-    <!-- Location permissions (for attendance geofencing) -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-
-    <!-- Background location (if checking location while app is not open) -->
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
-
-    <!-- Biometric authentication -->
-    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
-
-    <!-- Older Android biometric support -->
-    <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
-
-    <uses-permission android:name="android.permission.INTERNET"/>
-
-
     <application
         android:label="gis_attendance"
         android:name="${applicationName}"
