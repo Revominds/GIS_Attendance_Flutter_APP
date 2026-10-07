@@ -1,6 +1,6 @@
 # GIS_Attendance — Update Channel 📲
 
-![version](https://img.shields.io/badge/latest-v1.0.4-green?style=flat-square)
+![version](https://img.shields.io/badge/latest-v1.0.5-green?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-Android-brightgreen?style=flat-square)
 ![flutter](https://img.shields.io/badge/built_with-Flutter-02569B?style=flat-square&logo=flutter)
 ![distribution](https://img.shields.io/badge/distribution-Self_Update-orange?style=flat-square)
@@ -72,6 +72,13 @@ Release APKs live under **GitHub Releases** (`vX.Y.Z` tags with
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Newest release on top.
+
+### [1.0.5] — 2026-10-08
+
+#### Added
+- Face check rebuilt photo-based: preview + auto-capture + tap 📷, on-device face-presence check, then server 1:1 match (no more stream-format crashes).
+- Admin Geo-fence tab: capture precise worksite GPS + range (50–1000 m); clock-in gated on precise fixes only.
+- App closes on logout / sign out (manual + inactivity auto-logout).
 
 ### [1.0.4] — 2026-10-08
 
