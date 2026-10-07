@@ -1,0 +1,6 @@
+{
+  "version": "1.0.2",
+  "apk_url": "https://github.com/Revominds/GIS_Attendance_Flutter_APP/releases/download/v1.0.2/app-release.apk",
+  "mandatory": false,
+  "notes": "Self-update support, GIS_Attendance name and new GIS logo."
+}
