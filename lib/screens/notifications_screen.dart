@@ -62,14 +62,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         foregroundColor: darkCharcoal,
+        iconTheme: const IconThemeData(color: darkCharcoal),
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
+          icon: const Icon(Icons.arrow_back_rounded, color: darkCharcoal),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
           'Notifications',
-          style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
+          style: TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 17,
+              color: darkCharcoal),
         ),
         actions: [
           IconButton(

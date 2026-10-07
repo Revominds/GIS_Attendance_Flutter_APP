@@ -285,12 +285,17 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     return Scaffold(
       backgroundColor: GisPalette.of(context).bg,
       appBar: AppBar(
-        title: const Text(
+        title: Text(
           'Two-factor verification',
-          style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
+          style: TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 17,
+              color: GisPalette.of(context).ink),
         ),
         backgroundColor: Colors.white,
-        foregroundColor: GisPalette.of(context).darkBg,
+        foregroundColor: GisPalette.of(context).ink,
+        iconTheme:
+            IconThemeData(color: GisPalette.of(context).ink),
         elevation: 0,
       ),
       body: Center(

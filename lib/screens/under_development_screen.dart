@@ -13,8 +13,17 @@ class UnderDevelopmentScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.grey.shade100,
-        title: Text(title),
+        foregroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.black),
+        title: Text(
+          title,
+          style: const TextStyle(
+            color: Colors.black,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
         centerTitle: true,
+        elevation: 0,
       ),
 
       backgroundColor: const Color(0xFFF3F4F6),
