@@ -1,6 +1,6 @@
 # GIS_Attendance — Update Channel 📲
 
-![version](https://img.shields.io/badge/latest-v1.0.5-green?style=flat-square)
+![version](https://img.shields.io/badge/latest-v1.0.6-green?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-Android-brightgreen?style=flat-square)
 ![flutter](https://img.shields.io/badge/built_with-Flutter-02569B?style=flat-square&logo=flutter)
 ![distribution](https://img.shields.io/badge/distribution-Self_Update-orange?style=flat-square)
@@ -72,6 +72,11 @@ Release APKs live under **GitHub Releases** (`vX.Y.Z` tags with
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Newest release on top.
+
+### [1.0.6] — 2026-10-08
+
+#### Added
+- Light + premium Dark themes with Settings → Appearance toggle (Light/Dark/System, persisted). All screens restyle via a theme-aware palette.
 
 ### [1.0.5] — 2026-10-08
 
