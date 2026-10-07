@@ -1,6 +1,6 @@
 # GIS_Attendance — Update Channel 📲
 
-![version](https://img.shields.io/badge/latest-v1.0.2-green?style=flat-square)
+![version](https://img.shields.io/badge/latest-v1.0.4-green?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-Android-brightgreen?style=flat-square)
 ![flutter](https://img.shields.io/badge/built_with-Flutter-02569B?style=flat-square&logo=flutter)
 ![distribution](https://img.shields.io/badge/distribution-Self_Update-orange?style=flat-square)
@@ -72,6 +72,18 @@ Release APKs live under **GitHub Releases** (`vX.Y.Z` tags with
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Newest release on top.
+
+### [1.0.4] — 2026-10-08
+
+#### Fixed
+- Face-scan `InputImageConverterError` NPE: frames are now validated (exact NV21 size, even dimensions) before reaching MLKit — malformed frames are skipped with an on-screen reason instead of crashing.
+- Manual capture (📷 button) now works even when live face detection finds nothing; the server still does the real 1:1 check.
+- Settings → App updates card: "Check for updates" moved to its own row (no more cramped single row).
+
+### [1.0.3] — 2026-10-07
+
+#### Changed
+- Biometric check reverted to previous stable implementation (`local_auth` 2.x).
 
 ### [1.0.2] — 2026-10-07
 
