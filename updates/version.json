@@ -1,6 +1,6 @@
 {
-  "version": "1.0.7",
-  "apk_url": "https://github.com/Revominds/GIS_Attendance_Flutter_APP/releases/download/v1.0.7/app-release.apk",
+  "version": "1.0.8",
+  "apk_url": "https://github.com/Revominds/GIS_Attendance_Flutter_APP/releases/download/v1.0.8/app-release.apk",
   "mandatory": false,
-  "notes": "Light-only theme (dark removed); location shows real place names instead of coordinates; logout returns to sign-in with a Close app option and stays on login after reopen."
+  "notes": "Black topbar titles on Notifications, OTP verification and Under-development screens (fixes invisible white-on-white text)."
 }
