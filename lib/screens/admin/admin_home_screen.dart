@@ -2,44 +2,154 @@
 // resets and attendance oversight. Reachable from the drawer only when
 // AuthService.isAdmin() is true (role-gated, same login).
 
-import 'package:flutter/material.dart';
-import 'package:gis_attendance/services/admin_service.dart';
+import 'dart:async';
 
-const _olive = Color(0xFF2E4D2A);
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:gis_attendance/services/admin_service.dart';
+import 'package:gis_attendance/services/notification_service.dart';
+import 'package:gis_attendance/services/permissions.dart';
+import 'package:gis_attendance/screens/admin/roster_report_screen.dart';
+import 'package:gis_attendance/screens/admin/broadcast_screen.dart';
+import 'package:gis_attendance/screens/admin/geofence_screen.dart';
+import 'package:gis_attendance/theme/gis_palette.dart';
+
 const _dark = Color(0xFF142412);
 const _gold = Color(0xFFE1B12C);
 const _red = Color(0xFFD63031);
 const _green = Color(0xFF2ED573);
-const _bg = Color(0xFFF5F6F5);
-const _muted = Color(0xFF6E7A6C);
+const _purple = Color(0xFF6C5CE7);
 
 class AdminHomeScreen extends StatelessWidget {
-  const AdminHomeScreen({super.key});
+  /// Which tab to open first (used by the dashboard roster shortcut,
+  /// which deep-links to the Reports tab).
+  final int initialTab;
+  const AdminHomeScreen({super.key, this.initialTab = 0});
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 7,
+      initialIndex: initialTab,
       child: Scaffold(
-        backgroundColor: _bg,
-        appBar: AppBar(
-          backgroundColor: _olive,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          title: const Text("Admin", style: TextStyle(fontWeight: FontWeight.w700)),
-          bottom: const TabBar(
-            indicatorColor: _gold,
-            labelColor: Colors.white,
-            unselectedLabelColor: Colors.white70,
-            tabs: [
-              Tab(text: "Officers"),
-              Tab(text: "Approvals"),
-              Tab(text: "Attendance"),
+        backgroundColor: GisPalette.of(context).bg,
+        body: SafeArea(
+          bottom: false,
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.fromLTRB(6, 10, 16, 0),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [GisPalette.of(context).primary, _dark],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.vertical(
+                    bottom: Radius.circular(24),
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        IconButton(
+                          onPressed: () => Navigator.maybePop(context),
+                          icon: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.12),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                                Icons.arrow_back_rounded,
+                                color: Colors.white,
+                                size: 19),
+                          ),
+                        ),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment:
+                                CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                "Administration",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 19,
+                                  letterSpacing: -0.3,
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                "Officers · attendance · broadcasts",
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.all(9),
+                          decoration: BoxDecoration(
+                            color: _gold,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.admin_panel_settings_rounded,
+                            color: _dark,
+                            size: 20,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    const TabBar(
+                      isScrollable: true,
+                      indicatorColor: _gold,
+                      indicatorWeight: 3,
+                      indicatorSize: TabBarIndicatorSize.label,
+                      dividerColor: Colors.transparent,
+                      labelColor: Colors.white,
+                      labelStyle: TextStyle(
+                          fontWeight: FontWeight.w700, fontSize: 13.5),
+                      unselectedLabelColor: Colors.white60,
+                      unselectedLabelStyle: TextStyle(
+                          fontWeight: FontWeight.w500, fontSize: 13.5),
+                      labelPadding:
+                          EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      tabs: [
+                        Tab(text: "Officers"),
+                        Tab(text: "Approvals"),
+                        Tab(text: "Attendance"),
+                        Tab(text: "Live"),
+                        Tab(text: "Reports"),
+                        Tab(text: "Broadcast"),
+                        Tab(text: "Geo-fence"),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                  ],
+                ),
+              ),
+              const Expanded(
+                child: TabBarView(
+                  children: [
+                    _OfficersTab(),
+                    _ApprovalsTab(),
+                    _AttendanceTab(),
+                    _LiveTab(),
+                    RosterReportScreen(),
+                    BroadcastScreen(),
+                    GeoFenceScreen(),
+                  ],
+                ),
+              ),
             ],
           ),
-        ),
-        body: const TabBarView(
-          children: [_OfficersTab(), _ApprovalsTab(), _AttendanceTab()],
         ),
       ),
     );
@@ -70,7 +180,7 @@ Future<bool> _confirm(BuildContext context, String title, String message,
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text("Cancel", style: TextStyle(color: _muted))),
+            child: Text("Cancel", style: TextStyle(color: GisPalette.of(context).muted))),
         TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: Text(confirmLabel,
@@ -145,9 +255,9 @@ class _OfficersTabState extends State<_OfficersTab> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bg,
+      backgroundColor: GisPalette.of(context).bg,
       floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: _olive,
+        backgroundColor: GisPalette.of(context).primary,
         foregroundColor: Colors.white,
         icon: const Icon(Icons.person_add_alt_1),
         label: const Text("New officer"),
@@ -183,16 +293,29 @@ class _OfficersTabState extends State<_OfficersTab> {
             child: RefreshIndicator(
               onRefresh: _load,
               child: _loading
-                  ? const Center(child: CircularProgressIndicator(color: _olive))
+                  ? Center(child: CircularProgressIndicator(color: GisPalette.of(context).primary))
                   : _error != null
                       ? _ErrorState(message: _error!, onRetry: _load)
-                      : ListView.separated(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: const EdgeInsets.fromLTRB(14, 6, 14, 90),
-                          itemCount: _filtered.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 8),
-                          itemBuilder: (_, i) => _officerCard(_filtered[i]),
-                        ),
+                      : _filtered.isEmpty
+                          ? Center(
+                              child: Text("No officers found",
+                                  style: TextStyle(color: GisPalette.of(context).muted)))
+                          : GridView.builder(
+                              physics:
+                                  const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.fromLTRB(
+                                  14, 6, 14, 90),
+                              gridDelegate:
+                                  const SliverGridDelegateWithMaxCrossAxisExtent(
+                                maxCrossAxisExtent: 380,
+                                mainAxisSpacing: 10,
+                                crossAxisSpacing: 10,
+                                mainAxisExtent: 92,
+                              ),
+                              itemCount: _filtered.length,
+                              itemBuilder: (_, i) =>
+                                  _officerCard(_filtered[i]),
+                            ),
             ),
           ),
         ],
@@ -202,7 +325,9 @@ class _OfficersTabState extends State<_OfficersTab> {
 
   Widget _officerCard(Map<String, dynamic> o) {
     final active = o['is_active'] == true;
-    final isAdmin = _s(o['role']) == 'admin';
+    final role = _s(o['role']).toLowerCase();
+    final roleLabel =
+        role == 'super_admin' ? "SUPER" : role == 'admin' ? "ADMIN" : null;
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(14),
@@ -214,11 +339,11 @@ class _OfficersTabState extends State<_OfficersTab> {
           child: Row(
             children: [
               CircleAvatar(
-                backgroundColor: _olive.withValues(alpha: 0.12),
+                backgroundColor: GisPalette.of(context).primary.withValues(alpha: 0.12),
                 child: Text(
                   (_s(o['full_name']).isNotEmpty ? _s(o['full_name'])[0] : '?')
                       .toUpperCase(),
-                  style: const TextStyle(color: _olive, fontWeight: FontWeight.bold),
+                  style: TextStyle(color: GisPalette.of(context).primary, fontWeight: FontWeight.bold),
                 ),
               ),
               const SizedBox(width: 12),
@@ -234,21 +359,25 @@ class _OfficersTabState extends State<_OfficersTab> {
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(fontWeight: FontWeight.w700)),
                         ),
-                        if (isAdmin) ...[
+                        if (roleLabel != null) ...[
                           const SizedBox(width: 6),
-                          const _Chip(text: "ADMIN", color: _gold),
+                          _Chip(
+                              text: roleLabel,
+                              color: role == 'super_admin'
+                                  ? _purple
+                                  : _gold),
                         ],
                       ],
                     ),
                     const SizedBox(height: 2),
                     Text("${_s(o['officer_id'])}  ·  ${_s(o['department'])}",
-                        style: const TextStyle(fontSize: 12, color: _muted)),
+                        style: TextStyle(fontSize: 12, color: GisPalette.of(context).muted)),
                   ],
                 ),
               ),
               _Chip(
                 text: active ? "Active" : "Inactive",
-                color: active ? _green : _muted,
+                color: active ? _green : GisPalette.of(context).muted,
               ),
             ],
           ),
@@ -272,10 +401,10 @@ class _OfficersTabState extends State<_OfficersTab> {
             const SizedBox(height: 10),
             Text(_s(o['full_name']),
                 style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-            Text(officerId, style: const TextStyle(color: _muted, fontSize: 12)),
+            Text(officerId, style: TextStyle(color: GisPalette.of(context).muted, fontSize: 12)),
             const SizedBox(height: 8),
             ListTile(
-              leading: const Icon(Icons.edit_outlined, color: _olive),
+              leading: Icon(Icons.edit_outlined, color: GisPalette.of(context).primary),
               title: const Text("Edit details"),
               onTap: () async {
                 Navigator.pop(sheetCtx);
@@ -299,7 +428,7 @@ class _OfficersTabState extends State<_OfficersTab> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.password_outlined, color: _olive),
+              leading: Icon(Icons.password_outlined, color: GisPalette.of(context).primary),
               title: const Text("Reset password"),
               onTap: () async {
                 Navigator.pop(sheetCtx);
@@ -344,7 +473,7 @@ class _OfficersTabState extends State<_OfficersTab> {
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text("Cancel", style: TextStyle(color: _muted))),
+              child: Text("Cancel", style: TextStyle(color: GisPalette.of(context).muted))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
               child: const Text("Reset", style: TextStyle(fontWeight: FontWeight.w700))),
@@ -406,7 +535,7 @@ class _ApprovalsTabState extends State<_ApprovalsTab> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _olive));
+      return Center(child: CircularProgressIndicator(color: GisPalette.of(context).primary));
     }
     if (_error != null) {
       return _ErrorState(message: _error!, onRetry: _load);
@@ -415,19 +544,26 @@ class _ApprovalsTabState extends State<_ApprovalsTab> {
       onRefresh: _load,
       child: _pending.isEmpty
           ? ListView(
-              children: const [
+              children: [
                 SizedBox(height: 120),
-                Icon(Icons.inbox_outlined, size: 40, color: _muted),
+                Icon(Icons.inbox_outlined, size: 40, color: GisPalette.of(context).muted),
                 SizedBox(height: 8),
                 Center(
                     child: Text("No officers awaiting approval",
-                        style: TextStyle(color: _muted))),
+                        style: TextStyle(color: GisPalette.of(context).muted))),
               ],
             )
-          : ListView.separated(
+          : GridView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.all(14),
+              gridDelegate:
+                  const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 400,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                mainAxisExtent: 216,
+              ),
               itemCount: _pending.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
               itemBuilder: (_, i) {
                 final o = _pending[i];
                 final officerId = _s(o['officer_id']);
@@ -444,7 +580,7 @@ class _ApprovalsTabState extends State<_ApprovalsTab> {
                         const SizedBox(height: 2),
                         Text(
                             "$officerId  ·  ${_s(o['department'])}\n${_s(o['email'])}",
-                            style: const TextStyle(fontSize: 12, color: _muted)),
+                            style: TextStyle(fontSize: 12, color: GisPalette.of(context).muted)),
                         const SizedBox(height: 10),
                         Row(
                           children: [
@@ -638,14 +774,39 @@ class _AttendanceTabState extends State<_AttendanceTab> {
                 flex: 2,
                 child: TextField(
                   controller: _dateCtrl,
-                  onSubmitted: (_) => _refresh(),
-                  keyboardType: TextInputType.datetime,
-                  decoration: _filterDecoration("YYYY-MM-DD"),
+                  readOnly: true,
+                  onTap: () => _pickDate(_dateCtrl),
+                  decoration: InputDecoration(
+                    hintText: "Pick a date",
+                    isDense: true,
+                    filled: true,
+                    fillColor: Colors.white,
+                    suffixIcon: _dateCtrl.text.trim().isEmpty
+                        ? IconButton(
+                            icon: Icon(
+                                Icons.calendar_month_outlined,
+                                size: 19,
+                                color: GisPalette.of(context).primary),
+                            onPressed: () => _pickDate(_dateCtrl),
+                          )
+                        : IconButton(
+                            icon: Icon(Icons.clear_rounded,
+                                size: 19, color: GisPalette.of(context).muted),
+                            onPressed: () {
+                              setState(() => _dateCtrl.clear());
+                              _refresh();
+                            },
+                          ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
               IconButton.filled(
-                style: IconButton.styleFrom(backgroundColor: _olive),
+                style: IconButton.styleFrom(backgroundColor: GisPalette.of(context).primary),
                 onPressed: _refresh,
                 icon: const Icon(Icons.search, size: 20),
               ),
@@ -665,30 +826,40 @@ class _AttendanceTabState extends State<_AttendanceTab> {
         const SizedBox(height: 10),
         Expanded(
           child: _loading
-              ? const Center(child: CircularProgressIndicator(color: _olive))
+              ? Center(child: CircularProgressIndicator(color: GisPalette.of(context).primary))
               : _error != null
                   ? _ErrorState(message: _error!, onRetry: _refresh)
                   : RefreshIndicator(
                       onRefresh: _refresh,
                       child: _rows.isEmpty
-                          ? ListView(children: const [
+                          ? ListView(children: [
                               SizedBox(height: 120),
                               Center(
                                   child: Text("No attendance records",
-                                      style: TextStyle(color: _muted))),
+                                      style: TextStyle(color: GisPalette.of(context).muted))),
                             ])
-                          : ListView.separated(
-                              padding: const EdgeInsets.fromLTRB(14, 4, 14, 24),
-                              itemCount: _rows.length + (_hasMore ? 1 : 0),
-                              separatorBuilder: (_, __) => const SizedBox(height: 8),
+                          : GridView.builder(
+                              physics:
+                                  const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.fromLTRB(
+                                  14, 4, 14, 24),
+                              gridDelegate:
+                                  const SliverGridDelegateWithMaxCrossAxisExtent(
+                                maxCrossAxisExtent: 440,
+                                mainAxisSpacing: 10,
+                                crossAxisSpacing: 10,
+                                mainAxisExtent: 96,
+                              ),
+                              itemCount:
+                                  _rows.length + (_hasMore ? 1 : 0),
                               itemBuilder: (_, i) {
                                 if (i == _rows.length) {
                                   return Center(
                                     child: Padding(
                                       padding: const EdgeInsets.all(12),
                                       child: _loadingMore
-                                          ? const CircularProgressIndicator(
-                                              color: _olive)
+                                          ? CircularProgressIndicator(
+                                              color: GisPalette.of(context).primary)
                                           : OutlinedButton(
                                               onPressed: _loadMore,
                                               child: const Text("Load more")),
@@ -715,6 +886,40 @@ class _AttendanceTabState extends State<_AttendanceTab> {
         ),
       );
 
+  Future<void> _pickDate(TextEditingController c) async {
+    final now = DateTime.now();
+    DateTime initial = now;
+    final cur = c.text.trim();
+    if (cur.isNotEmpty) {
+      try {
+        initial = DateTime.parse(cur);
+      } catch (_) {}
+    }
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2020),
+      lastDate: now.add(const Duration(days: 365)),
+      builder: (ctx, child) => Theme(
+        data: Theme.of(ctx).copyWith(
+          colorScheme: ColorScheme.light(
+            primary: GisPalette.of(context).primary,
+            onPrimary: Colors.white,
+            onSurface: _dark,
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null) {
+      setState(() {
+        c.text =
+            "${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}";
+      });
+      _refresh();
+    }
+  }
+
   Widget _row(Map<String, dynamic> r) {
     final open = r['is_open'] == true || r['check_out_time'] == null;
     final name = _s(r['full_name']).isEmpty ? _s(r['officer_id']) : _s(r['full_name']);
@@ -734,12 +939,12 @@ class _AttendanceTabState extends State<_AttendanceTab> {
                 Text(
                   "${_s(r['date'])}   ·   in ${_time(r['check_in_time'])}   ·   out ${_time(r['check_out_time'])}"
                   "${_dur(r['duration_minutes']).isEmpty ? '' : '   ·   ${_dur(r['duration_minutes'])}'}",
-                  style: const TextStyle(fontSize: 12, color: _muted),
+                  style: TextStyle(fontSize: 12, color: GisPalette.of(context).muted),
                 ),
               ],
             ),
           ),
-          _Chip(text: open ? "Open" : "Closed", color: open ? _green : _muted),
+          _Chip(text: open ? "Open" : "Closed", color: open ? _green : GisPalette.of(context).muted),
           PopupMenuButton<String>(
             onSelected: (v) async {
               if (v == 'out') {
@@ -771,6 +976,407 @@ class _AttendanceTabState extends State<_AttendanceTab> {
 }
 
 // --------------------------------------------------------------------------
+// LIVE — who's clocked in right now, auto-refreshed. Visible to admins
+// and super admins (the whole admin surface is role-gated).
+// --------------------------------------------------------------------------
+
+class _LiveTab extends StatefulWidget {
+  const _LiveTab();
+  @override
+  State<_LiveTab> createState() => _LiveTabState();
+}
+
+class _LiveTabState extends State<_LiveTab> {
+  final _admin = AdminService();
+  List<Map<String, dynamic>> _rows = [];
+  bool _loading = true;
+  String? _error;
+  DateTime _updatedAt = DateTime.now();
+  Timer? _timer;
+
+  static const Duration _pollEvery = Duration(seconds: 30);
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+    _timer = Timer.periodic(_pollEvery, (_) {
+      if (mounted) _refresh(silent: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  bool _isOpen(Map<String, dynamic> r) =>
+      r['is_open'] == true || r['check_out_time'] == null;
+
+  Future<void> _refresh({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    final res = await _admin.todayAttendance();
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _updatedAt = DateTime.now();
+      if (res.ok) {
+        _rows = res.data ?? [];
+        _rows.sort((a, b) {
+          final ao = _isOpen(a) ? 0 : 1;
+          final bo = _isOpen(b) ? 0 : 1;
+          if (ao != bo) return ao.compareTo(bo);
+          return _s(b['check_in_time'])
+              .compareTo(_s(a['check_in_time']));
+        });
+        _error = null;
+      } else if (_rows.isEmpty) {
+        _error = res.message;
+      } else {
+        _snack(context, res.message);
+      }
+    });
+  }
+
+  String _time(dynamic iso) {
+    if (iso == null) return '—';
+    try {
+      final d = DateTime.parse(iso.toString()).toLocal();
+      return "${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}";
+    } catch (_) {
+      return iso.toString();
+    }
+  }
+
+  String _clocked(DateTime t) =>
+      "${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}";
+
+  /// "2h 15m so far" for an open shift counting from check-in.
+  String _elapsed(dynamic iso) {
+    if (iso == null) return '';
+    try {
+      final mins =
+          DateTime.now().difference(DateTime.parse(iso.toString())).inMinutes;
+      if (mins < 0) return '';
+      if (mins < 60) return '${mins}m so far';
+      return '${mins ~/ 60}h ${mins % 60}m so far';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  Widget _liveCard(Map<String, dynamic> r) {
+    final open = _isOpen(r);
+    final id = _s(r['id']);
+    final name = _s(r['full_name']).isEmpty
+        ? _s(r['officer_id'])
+        : _s(r['full_name']);
+    final sub = open
+        ? "In ${_time(r['check_in_time'])}${_elapsed(r['check_in_time']).isEmpty ? '' : '   ·   ${_elapsed(r['check_in_time'])}'}"
+        : "In ${_time(r['check_in_time'])}   ·   out ${_time(r['check_out_time'])}";
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: open
+            ? Border.all(
+                color: _green.withValues(alpha: 0.5), width: 1.2)
+            : null,
+      ),
+      child: Row(
+        children: [
+          Stack(
+            children: [
+              CircleAvatar(
+                backgroundColor: GisPalette.of(context).primary.withValues(alpha: 0.12),
+                child: Text(
+                  (name.isNotEmpty ? name[0] : '?').toUpperCase(),
+                  style: TextStyle(
+                      color: GisPalette.of(context).primary, fontWeight: FontWeight.bold),
+                ),
+              ),
+              if (open)
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: _green,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(
+                  "${_s(r['officer_id'])}   ·   $sub",
+                  style:
+                      TextStyle(fontSize: 12, color: GisPalette.of(context).muted),
+                ),
+              ],
+            ),
+          ),
+          _Chip(
+              text: open ? "In now" : "Out",
+              color: open ? _green : GisPalette.of(context).muted),
+          PopupMenuButton<String>(
+            icon: Icon(Icons.more_vert_rounded,
+                size: 19, color: GisPalette.of(context).muted),
+            onSelected: (v) async {
+              if (v == 'out') {
+                final res = await _admin.forceClockOut(id);
+                if (!mounted) return;
+                _snack(context,
+                    res.ok ? "Clocked out." : res.message, ok: res.ok);
+                if (res.ok) _refresh();
+              } else if (v == 'del') {
+                if (await _confirm(
+                    context,
+                    "Delete record",
+                    "Delete ${_s(r['officer_id'])}'s row for ${_s(r['date'])}?",
+                    confirmLabel: "Delete")) {
+                  final res = await _admin.deleteAttendance(id);
+                  if (!mounted) return;
+                  _snack(context,
+                      res.ok ? "Deleted." : res.message, ok: res.ok);
+                  if (res.ok) _refresh();
+                }
+              }
+            },
+            itemBuilder: (_) => [
+              if (open)
+                const PopupMenuItem(
+                    value: 'out', child: Text("Force clock-out")),
+              const PopupMenuItem(
+                  value: 'del', child: Text("Delete record")),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _liveGrid(List<Map<String, dynamic>> items) {
+    if (items.isEmpty) return const [];
+    return [
+      GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        gridDelegate:
+            const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 440,
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          mainAxisExtent: 100,
+        ),
+        itemCount: items.length,
+        itemBuilder: (_, i) => _liveCard(items[i]),
+      ),
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final open = _rows.where(_isOpen).toList();
+    final closed = _rows.where((r) => !_isOpen(r)).toList();
+    return Column(
+      children: [
+        // live banner
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+                horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [GisPalette.of(context).primary, _dark],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 9, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _green,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.fiber_manual_record_rounded,
+                          size: 10, color: Colors.white),
+                      SizedBox(width: 4),
+                      Text("LIVE",
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.8)),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    "Updated ${_clocked(_updatedAt)}  ·  auto-refresh 30s",
+                    style: const TextStyle(
+                        color: Colors.white70, fontSize: 11.5),
+                  ),
+                ),
+                InkWell(
+                  onTap: () => _refresh(),
+                  borderRadius: BorderRadius.circular(18),
+                  child: Container(
+                    padding: const EdgeInsets.all(7),
+                    decoration: BoxDecoration(
+                      color:
+                          Colors.white.withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.refresh_rounded,
+                        size: 17, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Row(
+            children: [
+              _Stat(
+                  label: "Clocked in now",
+                  value: "${open.length}",
+                  color: _green),
+              const SizedBox(width: 10),
+              _Stat(
+                  label: "Clocked out",
+                  value: "${closed.length}"),
+              const SizedBox(width: 10),
+              _Stat(label: "Total today", value: "${_rows.length}"),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        Expanded(
+          child: _loading
+              ? Center(
+                  child: CircularProgressIndicator(color: GisPalette.of(context).primary))
+              : _error != null && _rows.isEmpty
+                  ? _ErrorState(message: _error!, onRetry: _refresh)
+                  : RefreshIndicator(
+                      onRefresh: () => _refresh(),
+                      child: _rows.isEmpty
+                          ? ListView(children: [
+                              SizedBox(height: 100),
+                              Icon(Icons.radar_rounded,
+                                  size: 40, color: GisPalette.of(context).muted),
+                              SizedBox(height: 8),
+                              Center(
+                                  child: Text(
+                                      "No clock-ins recorded today",
+                                      style:
+                                          TextStyle(color: GisPalette.of(context).muted))),
+                            ])
+                          : ListView(
+                              physics:
+                                  const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.fromLTRB(
+                                  14, 4, 14, 24),
+                              children: [
+                                _LiveSectionLabel(
+                                    "Clocked in now (${open.length})"),
+                                const SizedBox(height: 8),
+                                if (open.isEmpty)
+                                  const _LiveEmptyNote(
+                                      "Nobody is clocked in right now."),
+                                ..._liveGrid(open),
+                                const SizedBox(height: 14),
+                                _LiveSectionLabel(
+                                    "Clocked out (${closed.length})"),
+                                const SizedBox(height: 8),
+                                if (closed.isEmpty)
+                                  const _LiveEmptyNote(
+                                      "No clock-outs recorded yet."),
+                                ..._liveGrid(closed),
+                              ],
+                            ),
+                    ),
+        ),
+      ],
+    );
+  }
+}
+
+class _LiveSectionLabel extends StatelessWidget {
+  final String text;
+  const _LiveSectionLabel(this.text);
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Text(
+          text.toUpperCase(),
+          style: TextStyle(
+            color: GisPalette.of(context).muted,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.2,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LiveEmptyNote extends StatelessWidget {
+  final String text;
+  const _LiveEmptyNote(this.text);
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Text(text,
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 12.5, color: GisPalette.of(context).muted)),
+    );
+  }
+}
+
+// --------------------------------------------------------------------------
 // officer create / edit dialog
 // --------------------------------------------------------------------------
 
@@ -791,6 +1397,7 @@ class _OfficerFormDialogState extends State<_OfficerFormDialog> {
   late final TextEditingController _dept;
   late final TextEditingController _pos;
   late final TextEditingController _phone;
+  String _role = AppRoles.officer;
   bool _saving = false;
 
   bool get _isEdit => widget.existing != null;
@@ -805,6 +1412,8 @@ class _OfficerFormDialogState extends State<_OfficerFormDialog> {
     _dept = TextEditingController(text: _s(e['department']));
     _pos = TextEditingController(text: _s(e['position']));
     _phone = TextEditingController(text: _s(e['phone_number']));
+    final r = _s(e['role']).toLowerCase();
+    _role = AppRoles.all.contains(r) ? r : AppRoles.officer;
   }
 
   @override
@@ -835,11 +1444,57 @@ class _OfficerFormDialogState extends State<_OfficerFormDialog> {
             position: _pos.text.trim(),
             phoneNumber: _phone.text.trim(),
           );
+    String? roleError;
+    if (res.ok) {
+      final hadRole = _isEdit
+          ? _s(widget.existing!['role']).toLowerCase()
+          : AppRoles.officer;
+      final wantRole =
+          AppRoles.all.contains(_role) ? _role : AppRoles.officer;
+      if (wantRole != (AppRoles.all.contains(hadRole) ? hadRole : AppRoles.officer)) {
+        final roleRes =
+            await _admin.setOfficerRole(_id.text.trim(), wantRole);
+        if (roleRes.ok) {
+          NotificationService.logActivity(
+            'Role updated',
+            '${_id.text.trim()} is now ${AppRoles.label(wantRole)}.',
+            category: 'System',
+          );
+        } else {
+          roleError = roleRes.message;
+        }
+      }
+    }
     if (!mounted) return;
     setState(() => _saving = false);
-    if (res.ok) {
+    if (res.ok && roleError == null) {
       Navigator.pop(context, true);
       _snack(context, _isEdit ? "Officer updated." : "Officer created.", ok: true);
+    } else if (res.ok) {
+      final officerId = _id.text.trim();
+      final attemptedRole =
+          AppRoles.all.contains(_role) ? _role : AppRoles.officer;
+      Navigator.pop(context, true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Saved, but the role was not applied: $roleError"),
+          duration: const Duration(seconds: 10),
+          action: SnackBarAction(
+            label: 'COPY SQL FIX',
+            onPressed: () {
+              Clipboard.setData(ClipboardData(
+                  text: "-- Promote an officer when the API rejects `role` updates.\n"
+                      "-- Run in Supabase SQL Editor, then have them sign out and back in.\n"
+                      "UPDATE public.officers SET role = '$attemptedRole', updated_at = NOW() WHERE officer_id = '$officerId';"));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                    content: Text(
+                        'SQL copied — run it in Supabase SQL Editor, then the officer signs out and back in.')),
+              );
+            },
+          ),
+        ),
+      );
     } else {
       _snack(context, res.message);
     }
@@ -862,6 +1517,24 @@ class _OfficerFormDialogState extends State<_OfficerFormDialog> {
               _field(_dept, "Department"),
               _field(_pos, "Position"),
               _field(_phone, "Phone number", keyboard: TextInputType.phone),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: DropdownButtonFormField<String>(
+                  initialValue: _role,
+                  decoration: const InputDecoration(
+                      labelText: "Role", isDense: true),
+                  items: AppRoles.all
+                      .map((r) => DropdownMenuItem(
+                            value: r,
+                            child: Text(AppRoles.label(r)),
+                          ))
+                      .toList(),
+                  onChanged: _saving
+                      ? null
+                      : (v) => setState(
+                          () => _role = v ?? AppRoles.officer),
+                ),
+              ),
             ],
           ),
         ),
@@ -869,10 +1542,10 @@ class _OfficerFormDialogState extends State<_OfficerFormDialog> {
       actions: [
         TextButton(
             onPressed: _saving ? null : () => Navigator.pop(context),
-            child: const Text("Cancel", style: TextStyle(color: _muted))),
+            child: Text("Cancel", style: TextStyle(color: GisPalette.of(context).muted))),
         ElevatedButton(
           style: ElevatedButton.styleFrom(
-              backgroundColor: _olive, foregroundColor: Colors.white, elevation: 0),
+              backgroundColor: GisPalette.of(context).primary, foregroundColor: Colors.white, elevation: 0),
           onPressed: _saving ? null : _save,
           child: _saving
               ? const SizedBox(
@@ -912,6 +1585,16 @@ class _Chip extends StatelessWidget {
   final String text;
   final Color color;
   const _Chip({required this.text, required this.color});
+
+  /// Bright brand colors are unreadable as small text on light tints,
+  /// so map them to darker ink variants for the label.
+  Color get _textColor {
+    if (color == _gold) return const Color(0xFF7A5F00);
+    if (color == _green) return const Color(0xFF14663A);
+    if (color == _red) return const Color(0xFF9E2B2B);
+    return color;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -922,7 +1605,9 @@ class _Chip extends StatelessWidget {
       ),
       child: Text(text,
           style: TextStyle(
-              color: color, fontSize: 10.5, fontWeight: FontWeight.w700)),
+              color: _textColor,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700)),
     );
   }
 }
@@ -930,8 +1615,14 @@ class _Chip extends StatelessWidget {
 class _Stat extends StatelessWidget {
   final String label;
   final String value;
-  final Color color;
-  const _Stat({required this.label, required this.value, this.color = _olive});
+  final Color? color;
+  const _Stat({required this.label, required this.value, this.color});
+
+  Color _valueColor(BuildContext context) {
+    final c = color ?? GisPalette.of(context).primary;
+    return c == _green ? const Color(0xFF14663A) : c;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Expanded(
@@ -944,9 +1635,11 @@ class _Stat extends StatelessWidget {
           children: [
             Text(value,
                 style: TextStyle(
-                    fontSize: 22, fontWeight: FontWeight.w800, color: color)),
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: _valueColor(context))),
             const SizedBox(height: 2),
-            Text(label, style: const TextStyle(fontSize: 11.5, color: _muted)),
+            Text(label, style: TextStyle(fontSize: 11.5, color: GisPalette.of(context).muted)),
           ],
         ),
       ),
@@ -970,7 +1663,7 @@ class _ErrorState extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 32),
             child: Text(message,
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: _muted)),
+                style: TextStyle(color: GisPalette.of(context).muted)),
           ),
         ),
         const SizedBox(height: 14),

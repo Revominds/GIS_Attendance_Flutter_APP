@@ -24,4 +24,13 @@ class AppConfig {
     if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
     return _fallbackBaseUrl;
   }
+
+  /// URL of the version.json polled by the in-app updater
+  /// (UpdateService). Set APP_UPDATE_URL in .env, e.g. a Supabase
+  /// Storage public URL. Empty = updater reports "not configured".
+  static String get updateUrl {
+    final fromEnv = dotenv.env['APP_UPDATE_URL']?.trim();
+    if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
+    return '';
+  }
 }

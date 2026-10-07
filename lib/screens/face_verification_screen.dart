@@ -1,4 +1,12 @@
-// ignore_for_file: unused_field
+// Face check — photo-based (no live frame stream).
+//
+// Earlier versions fed raw camera-stream bytes to MLKit and broke on
+// device-specific frame layouts (RangeError, InputImageConverter NPEs).
+// This screen now only shows the camera preview; verification runs on a
+// captured photo via InputImage.fromFilePath (the rock-solid path):
+// auto-capture a few seconds after opening, or tap the camera button.
+// An on-device face-presence check runs first; the server then does the
+// real 1:1 match via POST /api/verify.
 
 import 'dart:async';
 import 'dart:io';
@@ -11,7 +19,7 @@ import 'package:gis_attendance/services/attendance_service.dart';
 class FaceVerificationScreen extends StatefulWidget {
   final CameraDescription camera;
 
-  /// The logged-in officer's id (e.g. "P/012/2025"). The captured frame
+  /// The logged-in officer's id (e.g. "P/012/2025"). The captured photo
   /// is checked 1:1 against THIS officer's registered face via
   /// POST /api/verify. On a match the screen pops `true` and the caller
   /// performs the clock in/out.
@@ -28,17 +36,16 @@ class FaceVerificationScreen extends StatefulWidget {
 }
 
 class _FaceVerificationScreenState extends State<FaceVerificationScreen> with SingleTickerProviderStateMixin {
-  late CameraController _controller;
+  CameraController? _controller;
   late FaceDetector _faceDetector;
   late AnimationController _animationController;
 
   bool _isInitialized = false;
   bool _isVerifying = false;
   File? _capturedImage; // Holds the "frozen" frame
-  List<Face> _faces = [];
-  Size? _imageSize;
+  bool _hasFace = false;
+  String? _debugStatus;
   Timer? _autoCaptureTimer;
-  bool _isProcessing = false;
 
   final AttendanceService _attendanceService = AttendanceService();
 
@@ -60,87 +67,86 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> with Si
   }
 
   Future<void> _initializeCamera() async {
-    _controller = CameraController(
+    final controller = CameraController(
       widget.camera,
       ResolutionPreset.medium,
       enableAudio: false,
-      imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
     );
+    _controller = controller;
 
     try {
-      await _controller.initialize();
-      await _controller.startImageStream(_processCameraImage);
-      setState(() => _isInitialized = true);
+      await controller.initialize();
+      if (!mounted) return;
+      setState(() {
+        _isInitialized = true;
+        _debugStatus = 'Center your face — auto capture in a moment…';
+      });
+      // Auto-capture once the preview settles. No image stream involved.
+      _autoCaptureTimer?.cancel();
+      _autoCaptureTimer = Timer(const Duration(seconds: 3), () {
+        if (mounted && !_isVerifying && _capturedImage == null) {
+          _captureAndVerify();
+        }
+      });
     } catch (e) {
       debugPrint("Camera Error: $e");
+      if (mounted) setState(() => _debugStatus = 'Camera error: $e');
     }
   }
 
-  Future<void> _processCameraImage(CameraImage image) async {
-    if (_isVerifying || _capturedImage != null || _isProcessing) return;
+  /// Manual captures (camera button) always run; auto-capture also runs.
+  /// A photo is taken, checked on-device for a face, then sent to the
+  /// server for the real 1:1 match.
+  Future<void> _captureAndVerify({bool manual = false}) async {
+    final controller = _controller;
+    if (_isVerifying ||
+        controller == null ||
+        !controller.value.isInitialized) {
+      return;
+    }
+    _autoCaptureTimer?.cancel();
 
-    _isProcessing = true;
+    setState(() {
+      _isVerifying = true;
+      _debugStatus = manual ? 'Checking photo…' : 'Captured — checking…';
+    });
 
     try {
-      final WriteBuffer allBytes = WriteBuffer();
-      for (final Plane plane in image.planes) {
-        allBytes.putUint8List(plane.bytes);
+      final XFile imageFile = await controller.takePicture();
+      final file = File(imageFile.path);
+
+      // 1. On-device presence check (file path = stable MLKit route).
+      bool faceFound = false;
+      try {
+        final faces =
+            await _faceDetector.processImage(InputImage.fromFilePath(file.path));
+        faceFound = faces.isNotEmpty;
+      } catch (e) {
+        debugPrint('file detect error: $e');
       }
-      final bytes = allBytes.done().buffer.asUint8List();
+      if (!mounted) return;
 
-      final metadata = InputImageMetadata(
-        size: Size(image.width.toDouble(), image.height.toDouble()),
-        rotation: InputImageRotationValue.fromRawValue(widget.camera.sensorOrientation) ??
-            InputImageRotation.rotation0deg,
-        format: InputImageFormatValue.fromRawValue(image.format.raw) ?? InputImageFormat.nv21,
-        bytesPerRow: image.planes[0].bytesPerRow,
-      );
-
-      final inputImage = InputImage.fromBytes(bytes: bytes, metadata: metadata);
-
-      final faces = await _faceDetector.processImage(inputImage);
-
-      if (mounted) {
+      if (!faceFound) {
         setState(() {
-          _faces = faces;
-          _imageSize = Size(image.width.toDouble(), image.height.toDouble());
+          _isVerifying = false;
+          _hasFace = false;
+          _debugStatus = 'No face found — retry';
         });
-
-        if (faces.isNotEmpty && _autoCaptureTimer == null) {
-          _autoCaptureTimer = Timer(const Duration(milliseconds: 800), () {
-            _captureAndVerify();
-          });
-        } else if (faces.isEmpty) {
-          _autoCaptureTimer?.cancel();
-          _autoCaptureTimer = null;
-        }
+        _showRetryDialog(
+            'No face was detected in the photo. Center your face in the circle and try again.');
+        return;
       }
-    } catch (e) {
-      debugPrint("Processing error: $e");
-    } finally {
-      _isProcessing = false;
-    }
-  }
-
-  Future<void> _captureAndVerify() async {
-    if (_isVerifying || _faces.isEmpty) return;
-
-    try {
-      // 1. Capture the frame
-      final XFile imageFile = await _controller.takePicture();
 
       setState(() {
-        _isVerifying = true;
-        _capturedImage = File(imageFile.path);
+        _capturedImage = file;
+        _hasFace = true;
       });
-
-      await _controller.stopImageStream();
 
       // 2. 1:1 check against this officer's registered face. On a match
       // the caller does the actual clock in/out.
       final result = await _attendanceService.verifyFace(
         officerId: widget.userId,
-        imageFile: _capturedImage!,
+        imageFile: file,
       );
 
       if (result.ok) {
@@ -151,6 +157,11 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> with Si
 
       _showRetryDialog(result.message);
     } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isVerifying = false;
+        _debugStatus = 'Capture failed — retry';
+      });
       _showRetryDialog("Verification failed: $e");
     }
   }
@@ -184,27 +195,55 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> with Si
 
   Future<void> _resetCamera() async {
     _autoCaptureTimer?.cancel();
-    _autoCaptureTimer = null;
+    if (!mounted) return;
     setState(() {
       _isVerifying = false;
       _capturedImage = null;
-      _faces = [];
+      _hasFace = false;
+      _debugStatus = 'Center your face — auto capture in a moment…';
     });
-    await _controller.startImageStream(_processCameraImage);
+    _autoCaptureTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted && !_isVerifying && _capturedImage == null) {
+        _captureAndVerify();
+      }
+    });
   }
 
   @override
   void dispose() {
     _autoCaptureTimer?.cancel();
     _animationController.dispose();
-    _controller.dispose();
-    _faceDetector.close();
+    try {
+      _controller?.dispose();
+    } catch (_) {}
+    try {
+      _faceDetector.close();
+    } catch (_) {}
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_isInitialized) return const Scaffold(backgroundColor: Colors.black, body: Center(child: CircularProgressIndicator()));
+    final controller = _controller;
+    if (!_isInitialized || controller == null) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              if (_debugStatus != null) ...[
+                const SizedBox(height: 12),
+                Text(_debugStatus!,
+                    style:
+                        const TextStyle(color: Colors.white70, fontSize: 12)),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -213,7 +252,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> with Si
         children: [
           _capturedImage != null
               ? Image.file(_capturedImage!, fit: BoxFit.cover)
-              : CameraPreview(_controller),
+              : CameraPreview(controller),
 
           if (_capturedImage == null) ...[
             _buildOverlay(),
@@ -263,14 +302,25 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> with Si
           const Text("Biometric Check", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Text(
-            _faces.isEmpty
-                ? "Center your face in the circle"
-                : "Hold still...",
+            _hasFace
+                ? "Hold still..."
+                : "Center your face in the circle — or tap 📷",
             style: TextStyle(
-              color: _faces.isEmpty ? Colors.white70 : Colors.greenAccent,
+              color: _hasFace ? Colors.greenAccent : Colors.white70,
               fontWeight: FontWeight.w500,
             ),
           ),
+          if (_debugStatus != null) ...[
+            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                _debugStatus!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white38, fontSize: 11),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -283,18 +333,18 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> with Si
       right: 0,
       child: Center(
         child: GestureDetector(
-          onTap: _captureAndVerify,
+          onTap: () => _captureAndVerify(manual: true),
           child: Container(
             height: 85,
             width: 85,
             padding: const EdgeInsets.all(5),
             decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 3)),
             child: Container(
-              decoration: BoxDecoration(
-                color: _faces.isEmpty ? Colors.white24 : Colors.white,
+              decoration: const BoxDecoration(
+                color: Colors.white,
                 shape: BoxShape.circle,
               ),
-              child: Icon(Icons.camera_alt, color: _faces.isEmpty ? Colors.white38 : Colors.black, size: 35),
+              child: const Icon(Icons.camera_alt, color: Colors.black, size: 35),
             ),
           ),
         ),
@@ -309,7 +359,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> with Si
         return CustomPaint(
           painter: ScannerPainter(
             scanProgress: _animationController.value,
-            hasFace: _faces.isNotEmpty,
+            hasFace: _hasFace,
           ),
         );
       },

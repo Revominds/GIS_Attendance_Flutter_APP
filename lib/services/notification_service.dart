@@ -552,6 +552,11 @@ class NotificationService {
         AppLog.w("NotificationService", '   ⚠️  API fetch failed: $e');
       }
 
+      final hidden = await _hiddenIds();
+      if (hidden.isNotEmpty) {
+        allNotifications.removeWhere((n) => hidden.contains(n.id));
+      }
+
       allNotifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
       notificationsNotifier.value = List.from(allNotifications);
 
@@ -570,6 +575,7 @@ class NotificationService {
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_storageKey);
+      await prefs.remove(_hiddenKey);
 
       AppLog.d("NotificationService", '   Cleared SharedPreferences');
 
@@ -608,6 +614,95 @@ class NotificationService {
     } catch (e, stackTrace) {
       AppLog.e("NotificationService", '❌ [Mark as Read] ERROR: $e');
       AppLog.d("NotificationService", '📋 Stack trace: $stackTrace');
+    }
+  }
+
+  // ============================================================================
+  // ACTIVITY LOG — app-wide event capture (logins, clock in/out, …)
+  // ============================================================================
+
+  static const String _hiddenKey = 'adb_hidden_ids_v1';
+  static const String _activityFlagKey = 'activity_logging_enabled';
+  static const String _loginAlertsKey = 'login_alerts_enabled';
+
+  /// Fire-and-forget activity entry. Never throws — logging must never
+  /// break the flow that produced the event. Honours the toggles in the
+  /// System Config screen (both default to true).
+  static Future<void> logActivity(
+    String title,
+    String message, {
+    String category = 'Activity',
+    bool loginEvent = false,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!(prefs.getBool(_activityFlagKey) ?? true)) return;
+      if (loginEvent && !(prefs.getBool(_loginAlertsKey) ?? true)) return;
+      await saveLocalLog(title: title, message: message, category: category);
+    } catch (_) {
+      // best-effort only
+    }
+  }
+
+  static Future<void> markAllRead() async {
+    try {
+      final current = List<NotificationItem>.from(notificationsNotifier.value);
+      var changed = false;
+      for (final n in current) {
+        if (!n.isRead) {
+          n.isRead = true;
+          changed = true;
+        }
+      }
+      if (!changed) return;
+      notificationsNotifier.value = current;
+      final prefs = await SharedPreferences.getInstance();
+      final local = current
+          .where((n) => n.category != "Staff Announcement")
+          .toList();
+      await prefs.setString(_storageKey,
+          json.encode(local.map((e) => e.toJson()).toList()));
+      await _updateAppBadge();
+    } catch (_) {
+      // best-effort only
+    }
+  }
+
+  static Future<Set<int>> _hiddenIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getStringList(_hiddenKey);
+      if (raw == null) return <int>{};
+      return raw.map((e) => int.tryParse(e)).whereType<int>().toSet();
+    } catch (_) {
+      return <int>{};
+    }
+  }
+
+  /// Deletes a notification. Local items are removed from storage; server
+  /// announcements (which refresh would re-add) are remembered as hidden.
+  static Future<void> deleteNotification(int id) async {
+    try {
+      final current = List<NotificationItem>.from(notificationsNotifier.value);
+      final removed =
+          current.where((n) => n.id == id).toList(growable: false);
+      current.removeWhere((n) => n.id == id);
+      notificationsNotifier.value = current;
+      final prefs = await SharedPreferences.getInstance();
+      final local = current
+          .where((n) => n.category != "Staff Announcement")
+          .toList();
+      await prefs.setString(_storageKey,
+          json.encode(local.map((e) => e.toJson()).toList()));
+      if (removed.any((n) => n.category == "Staff Announcement")) {
+        final hidden = await _hiddenIds();
+        hidden.add(id);
+        await prefs.setStringList(
+            _hiddenKey, hidden.map((e) => e.toString()).toList());
+      }
+      await _updateAppBadge();
+    } catch (_) {
+      // best-effort only
     }
   }
 

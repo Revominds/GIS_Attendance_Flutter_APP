@@ -147,8 +147,112 @@ class AdminService {
     );
   }
 
-  Future<ApiResult<void>> setOfficerActive(String officerId, bool active) async {
+  /// Changes an officer's role ('officer', 'admin' or 'super_admin').
+  ///
+  /// The documented `PATCH /officers` only accepts profile fields (a lone
+  /// `{role}` comes back as "no valid update field"), so this tries three
+  /// strategies in order and reports honestly:
+  /// 1. `PATCH /officers {officer_id, role}` (works if whitelisted).
+  /// 2. `PUT /officers` full record + role (needs full_name + email).
+  /// 3. `PATCH /officers/{id} {role}` by internal id.
+  Future<ApiResult<void>> setOfficerRole(
+      String officerId, String role) async {
     final headers = await _authHeaders();
+    if (headers == null) return _noToken();
+
+    final direct = await _run<void>(
+      "setOfficerRole",
+      () => http.patch(
+        Uri.parse("$_base/officers"),
+        headers: headers,
+        body: jsonEncode({"officer_id": officerId, "role": role}),
+      ),
+      (_) {},
+    );
+    if (direct.ok) return direct;
+
+    final record = await _fetchOfficerRecord(officerId);
+    if (record != null) {
+      final putRes = await _run<void>(
+        "setOfficerRolePut",
+        () => http.put(
+          Uri.parse("$_base/officers"),
+          headers: headers,
+          body: jsonEncode({
+            "officer_id": officerId,
+            "full_name":
+                record["full_name"] ?? record["fullName"] ?? "",
+            "email": record["email"] ?? "",
+            if (record["department"] != null)
+              "department": record["department"],
+            if (record["position"] != null)
+              "position": record["position"],
+            if (record["phone_number"] != null)
+              "phone_number": record["phone_number"],
+            if (record["is_active"] != null)
+              "is_active": record["is_active"],
+            "role": role,
+          }),
+        ),
+        (_) {},
+      );
+      if (putRes.ok) return putRes;
+
+      final internalId = record["id"]?.toString();
+      if (internalId != null && internalId.isNotEmpty) {
+        final byId = await _run<void>(
+          "setOfficerRolePatchId",
+          () => http.patch(
+            Uri.parse("$_base/officers/$internalId"),
+            headers: headers,
+            body: jsonEncode({"role": role}),
+          ),
+          (_) {},
+        );
+        if (byId.ok) return byId;
+        return ApiResult.failure(
+          "Role change rejected (${byId.message}). The server does not accept a `role` update — enable it backend-side.",
+          statusCode: byId.statusCode,
+        );
+      }
+      return ApiResult.failure(
+        "Role change rejected (${putRes.message}). The server does not accept a `role` update — enable it backend-side.",
+        statusCode: putRes.statusCode,
+      );
+    }
+    return ApiResult.failure(
+      "Role change rejected (${direct.message}). The server does not accept a `role` update — enable it backend-side.",
+      statusCode: direct.statusCode,
+    );
+  }
+
+  /// One officer record by business officer_id (GET /officers needs no
+  /// token). Returns null when the lookup fails for any reason.
+  Future<Map<String, dynamic>?> _fetchOfficerRecord(
+      String officerId) async {
+    try {
+      final resp = await http
+          .get(Uri.parse(
+              "$_base/officers?officer_id=${Uri.encodeQueryComponent(officerId)}"))
+          .timeout(_timeout);
+      if (resp.statusCode < 200 ||
+          resp.statusCode >= 300 ||
+          resp.body.isEmpty) {
+        return null;
+      }
+      final body = jsonDecode(resp.body);
+      final data = (body is Map) ? body['data'] : body;
+      if (data is List && data.isNotEmpty && data.first is Map) {
+        return Map<String, dynamic>.from(data.first as Map);
+      }
+      if (data is Map) return Map<String, dynamic>.from(data);
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<ApiResult<void>> setOfficerActive(String officerId, bool active) async {    final headers = await _authHeaders();
     if (headers == null) return _noToken();
     return _run(
       "setOfficerActive",

@@ -6,7 +6,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:gis_attendance/services/auth_service.dart';
+import 'package:gis_attendance/services/notification_service.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:gis_attendance/theme/gis_palette.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -40,12 +42,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final AuthService _authService = AuthService();
   final ImagePicker _picker = ImagePicker();
 
-  // GIS Theme Colors
-  static const Color gisDeepOlive = Color(0xFF2E4D2A);
-  static const Color gisDarkBackground = Color(0xFF142412);
-  static const Color ghanaGold = Color(0xFFE1B12C);
-  static const Color nationalRed = Color(0xFFD63031);
-  static const Color lightGrayBg = Color(0xFFF5F6F5);
+  // GIS Theme Colors now resolve from GisPalette (light/dark aware).
 
   @override
   void dispose() {
@@ -172,9 +169,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(message),
-            backgroundColor: gisDeepOlive,
+            backgroundColor: GisPalette.of(context).primary,
             duration: const Duration(seconds: 4),
           ),
+        );
+        NotificationService.logActivity(
+          'Registration submitted',
+          'Officer ${_staffIdCtrl.text.trim()} submitted a registration — pending admin approval.',
+          category: 'Security',
         );
         Navigator.of(context).pop(true);
       } else {
@@ -192,78 +194,205 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
+  void _goBack() {
+    if (_currentStep > 0) {
+      setState(() {
+        _currentStep--;
+        _error = null;
+      });
+    } else {
+      Navigator.of(context).pop();
+    }
+  }
+
+  /// Side image for wide screens (left panel, larger, full height).
+  Widget _buildSideImage() {
+    return Container(
+      height: double.infinity,
+      width: double.infinity,
+      color: GisPalette.of(context).darkBg,
+      child: Image.asset(
+        'assets/register.png',
+        fit: BoxFit.cover,
+        alignment: Alignment.center,
+        errorBuilder: (_, __, ___) => Center(
+          child:
+              Icon(Icons.person_add_alt_1, color: GisPalette.of(context).gold, size: 56),
+        ),
+      ),
+    );
+  }
+
+  /// Top banner for narrow screens.
+  Widget _buildTopBanner() {
+    return ClipRRect(
+      borderRadius: const BorderRadius.only(
+        bottomLeft: Radius.circular(28),
+        bottomRight: Radius.circular(28),
+      ),
+      child: Image.asset(
+        'assets/register.png',
+        width: double.infinity,
+        height: 250,
+        fit: BoxFit.cover,
+        alignment: Alignment.center,
+        errorBuilder: (_, __, ___) => Container(
+          width: double.infinity,
+          height: 250,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [GisPalette.of(context).darkBg, GisPalette.of(context).primary],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+          ),
+          child: Center(
+            child:
+                Icon(Icons.person_add_alt_1, color: GisPalette.of(context).gold, size: 56),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Shared registration form card (used by both wide and narrow layouts).
+  Widget _buildFormCard() {
+    return Container(
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.12),
+                                blurRadius: 20,
+                                offset: const Offset(0, 10),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (_error != null) _buildErrorBanner(),
+
+                              // Active Step View
+                              if (_currentStep == 0) _buildStep1OfficerId(),
+                              if (_currentStep == 1)
+                                _buildStep2BiometricsAndData(),
+                              if (_currentStep == 2) _buildStep3Password(),
+                            ],
+                          ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final wide = MediaQuery.of(context).size.width >= 800;
+    if (wide) {
+      // Wide grid: image on the left (larger, full height top to
+      // bottom), form on the right (smaller). No AppBar so the image
+      // spans the full height; back navigation lives in the form panel.
+      return Scaffold(
+        backgroundColor: GisPalette.of(context).bg,
+        body: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(flex: 3, child: _buildSideImage()),
+            Expanded(
+              flex: 2,
+              child: Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 32, vertical: 24),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    child: Column(
+                      children: [
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: _goBack,
+                            icon: Icon(Icons.arrow_back,
+                                color: GisPalette.of(context).primary),
+                            label: Text(
+                              "Back",
+                              style: TextStyle(color: GisPalette.of(context).primary),
+                            ),
+                          ),
+                        ),
+                        _buildStepHeader(),
+                        const SizedBox(height: 16),
+                        _buildFormCard(),
+                        const SizedBox(height: 24),
+                        Text(
+                          "Safe Migration, Secure Ghana",
+                          style: TextStyle(
+                            color: Colors.grey.shade500,
+                            fontSize: 11,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return Scaffold(
+      backgroundColor: GisPalette.of(context).bg,
       appBar: AppBar(
-        backgroundColor: gisDarkBackground,
+        backgroundColor: GisPalette.of(context).darkBg,
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () {
-            if (_currentStep > 0) {
-              setState(() {
-                _currentStep--;
-                _error = null;
-              });
-            } else {
-              Navigator.of(context).pop();
-            }
-          },
+          onPressed: _goBack,
         ),
         title: const Text(
           "Officer Registration",
           style: TextStyle(color: Colors.white, fontSize: 18),
         ),
       ),
-      body: Container(
-        width: double.infinity,
-        height: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [gisDarkBackground, gisDeepOlive],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-            child: Column(
-              children: [
-                // Step Indicator Bar
-                _buildStepHeader(),
-                const SizedBox(height: 24),
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
+            _buildTopBanner(),
 
-                // Card Wrapper
-                Container(
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.3),
-                        blurRadius: 20,
-                        offset: const Offset(0, 10),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (_error != null) _buildErrorBanner(),
+            // --- Content (overlaps banner, constrained for web) ---
+            Transform.translate(
+              offset: const Offset(0, -28),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 560),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Column(
+                      children: [
+                        // Step Indicator Bar
+                        _buildStepHeader(),
+                        const SizedBox(height: 16),
 
-                      // Active Step View
-                      if (_currentStep == 0) _buildStep1OfficerId(),
-                      if (_currentStep == 1) _buildStep2BiometricsAndData(),
-                      if (_currentStep == 2) _buildStep3Password(),
-                    ],
+                        _buildFormCard(),
+                        const SizedBox(height: 24),
+                        Text(
+                          "Safe Migration, Secure Ghana",
+                          style: TextStyle(
+                            color: Colors.grey.shade500,
+                            fontSize: 11,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                      ],
+                    ),
                   ),
                 ),
-              ],
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -276,12 +405,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             "Step 1: Verify Officer ID",
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
-              color: gisDeepOlive,
+              color: GisPalette.of(context).primary,
             ),
           ),
           const SizedBox(height: 6),
@@ -290,12 +419,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
             style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
           ),
           const SizedBox(height: 24),
-          const Text(
+          Text(
             "Officer ID",
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.bold,
-              color: gisDeepOlive,
+              color: GisPalette.of(context).primary,
             ),
           ),
           const SizedBox(height: 8),
@@ -307,9 +436,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
             decoration: InputDecoration(
               hintText: "e.g., GIS-88421",
               hintStyle: TextStyle(color: Colors.grey.shade400),
-              prefixIcon: const Icon(Icons.badge_outlined, color: gisDeepOlive),
+              prefixIcon: Icon(Icons.badge_outlined, color: GisPalette.of(context).primary),
               filled: true,
-              fillColor: lightGrayBg,
+              fillColor: GisPalette.of(context).bg,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide.none,
@@ -325,7 +454,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             child: ElevatedButton(
               onPressed: _fetchingDetails ? null : _fetchOfficerData,
               style: ElevatedButton.styleFrom(
-                backgroundColor: gisDeepOlive,
+                backgroundColor: GisPalette.of(context).primary,
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -360,12 +489,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
+        Text(
           "Step 2: Biometric & Record Check",
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.bold,
-            color: gisDeepOlive,
+            color: GisPalette.of(context).primary,
           ),
         ),
         const SizedBox(height: 20),
@@ -374,9 +503,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: lightGrayBg,
+            color: GisPalette.of(context).bg,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: gisDeepOlive.withValues(alpha: 0.2)),
+            border: Border.all(color: GisPalette.of(context).primary.withValues(alpha: 0.2)),
           ),
           child: Column(
             children: [
@@ -403,19 +532,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color: _faceFile != null ? ghanaGold : gisDeepOlive,
+                      color: _faceFile != null ? GisPalette.of(context).gold : GisPalette.of(context).primary,
                       width: 3,
                     ),
                   ),
                   child: CircleAvatar(
                     radius: 46,
-                    backgroundColor: lightGrayBg,
+                    backgroundColor: GisPalette.of(context).bg,
                     backgroundImage:
                         _faceFile != null ? FileImage(_faceFile!) : null,
                     child: _faceFile == null
-                        ? const Icon(
+                        ? Icon(
                             Icons.camera_alt_rounded,
-                            color: gisDeepOlive,
+                            color: GisPalette.of(context).primary,
                             size: 34,
                           )
                         : null,
@@ -429,7 +558,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                    color: _faceFile == null ? gisDeepOlive : ghanaGold,
+                    color: _faceFile == null ? GisPalette.of(context).primary : GisPalette.of(context).gold,
                   ),
                 ),
               ],
@@ -443,7 +572,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           child: ElevatedButton(
             onPressed: _proceedToStep3,
             style: ElevatedButton.styleFrom(
-              backgroundColor: gisDeepOlive,
+              backgroundColor: GisPalette.of(context).primary,
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -470,12 +599,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             "Step 3: Account Credentials",
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
-              color: gisDeepOlive,
+              color: GisPalette.of(context).primary,
             ),
           ),
           const SizedBox(height: 6),
@@ -486,12 +615,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
           const SizedBox(height: 20),
 
           // Password Field
-          const Text(
+          Text(
             "Password",
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.bold,
-              color: gisDeepOlive,
+              color: GisPalette.of(context).primary,
             ),
           ),
           const SizedBox(height: 8),
@@ -502,17 +631,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
             style: const TextStyle(color: Colors.black87),
             decoration: InputDecoration(
               hintText: "Enter password",
-              prefixIcon: const Icon(Icons.lock_outline, color: gisDeepOlive),
+              prefixIcon: Icon(Icons.lock_outline, color: GisPalette.of(context).primary),
               suffixIcon: IconButton(
                 icon: Icon(
                   _obscurePassword ? Icons.visibility_off : Icons.visibility,
-                  color: gisDeepOlive,
+                  color: GisPalette.of(context).primary,
                 ),
                 onPressed: () =>
                     setState(() => _obscurePassword = !_obscurePassword),
               ),
               filled: true,
-              fillColor: lightGrayBg,
+              fillColor: GisPalette.of(context).bg,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide.none,
@@ -527,12 +656,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
           const SizedBox(height: 16),
 
           // Confirm Password Field
-          const Text(
+          Text(
             "Confirm Password",
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.bold,
-              color: gisDeepOlive,
+              color: GisPalette.of(context).primary,
             ),
           ),
           const SizedBox(height: 8),
@@ -543,19 +672,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
             style: const TextStyle(color: Colors.black87),
             decoration: InputDecoration(
               hintText: "Confirm password",
-              prefixIcon: const Icon(Icons.lock_outline, color: gisDeepOlive),
+              prefixIcon: Icon(Icons.lock_outline, color: GisPalette.of(context).primary),
               suffixIcon: IconButton(
                 icon: Icon(
                   _obscureConfirmPassword
                       ? Icons.visibility_off
                       : Icons.visibility,
-                  color: gisDeepOlive,
+                  color: GisPalette.of(context).primary,
                 ),
                 onPressed: () => setState(
                     () => _obscureConfirmPassword = !_obscureConfirmPassword),
               ),
               filled: true,
-              fillColor: lightGrayBg,
+              fillColor: GisPalette.of(context).bg,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide.none,
@@ -572,7 +701,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             child: ElevatedButton(
               onPressed: _loading ? null : _submitRegistration,
               style: ElevatedButton.styleFrom(
-                backgroundColor: gisDeepOlive,
+                backgroundColor: GisPalette.of(context).primary,
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -625,16 +754,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
           CircleAvatar(
             radius: 16,
             backgroundColor: isDone
-                ? ghanaGold
+                ? GisPalette.of(context).gold
                 : isActive
-                    ? Colors.white
-                    : Colors.white24,
+                    ? GisPalette.of(context).primary
+                    : Colors.grey.shade300,
             child: isDone
-                ? const Icon(Icons.check, size: 18, color: gisDarkBackground)
+                ? const Icon(Icons.check, size: 18, color: Colors.white)
                 : Text(
                     label,
                     style: TextStyle(
-                      color: isActive ? gisDarkBackground : Colors.white70,
+                      color: isActive ? Colors.white : Colors.grey.shade600,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -644,7 +773,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             title,
             style: TextStyle(
               fontSize: 11,
-              color: isActive ? Colors.white : Colors.white60,
+              color: isActive ? GisPalette.of(context).primary : Colors.grey.shade500,
               fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
             ),
           ),
@@ -659,7 +788,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       width: 30,
       height: 2,
       margin: const EdgeInsets.only(bottom: 18),
-      color: isDone ? ghanaGold : Colors.white24,
+      color: isDone ? GisPalette.of(context).gold : Colors.grey.shade300,
     );
   }
 
@@ -671,9 +800,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         Flexible(
           child: Text(
             value.isEmpty ? "—" : value,
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.bold,
-              color: gisDarkBackground,
+              color: GisPalette.of(context).darkBg,
               fontSize: 13,
             ),
             textAlign: TextAlign.end,
@@ -689,18 +818,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: nationalRed.withValues(alpha: 0.1),
+        color: GisPalette.of(context).danger.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: nationalRed.withValues(alpha: 0.3)),
+        border: Border.all(color: GisPalette.of(context).danger.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.error_outline, color: nationalRed, size: 18),
+          Icon(Icons.error_outline, color: GisPalette.of(context).danger, size: 18),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               _error!,
-              style: const TextStyle(color: nationalRed, fontSize: 12),
+              style: TextStyle(color: GisPalette.of(context).danger, fontSize: 12),
             ),
           ),
         ],

@@ -68,14 +68,44 @@ class AttendanceService {
         return LocationResponse(success: false, message: "Location permissions are permanently denied.");
       }
 
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
+      Position position;
+      try {
+        // Take up to 3 fixes and keep the most accurate one. A single
+        // shot — especially on web, where the browser only has WiFi/IP
+        // level data — can be kilometres off, and every label and
+        // geofence check downstream inherits that error.
+        Position? best;
+        for (var attempt = 0; attempt < 3; attempt++) {
+          try {
+            final pos = await Geolocator.getCurrentPosition(
+              desiredAccuracy: LocationAccuracy.best,
+              timeLimit: const Duration(seconds: 10),
+            );
+            if (best == null || pos.accuracy < best.accuracy) {
+              best = pos;
+            }
+            if (pos.accuracy <= 100) break;
+          } catch (_) {
+            if (best != null) break;
+            rethrow;
+          }
+        }
+        position = best!;
+      } catch (_) {
+        return LocationResponse(
+            success: false,
+            message:
+                "Could not get a GPS fix. Move outdoors and try again.");
+      }
 
       return LocationResponse(
         success: true,
         message: "Location fetched successfully.",
-        location: {"lat": position.latitude, "lng": position.longitude},
+        location: {
+          "lat": position.latitude,
+          "lng": position.longitude,
+          "acc": position.accuracy,
+        },
       );
 
     } catch (e) {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:gis_attendance/services/attendance_service.dart';
+import 'package:gis_attendance/theme/gis_palette.dart';
 
 class AttendanceHistoryScreen extends StatefulWidget {
   final Map<String, dynamic>? profile;
@@ -24,16 +25,11 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   List<Map<String, dynamic>> _history = [];
   bool _historyLoading = false;
   String? _openAttendanceId;
+  String _filter = 'All'; // All | Ongoing | Completed
 
   late ScrollController _scrollController;
 
-  // GIS Theme Colors
-  static const Color gisDeepOlive = Color(0xFF2E4D2A);
-  static const Color gisDarkBackground = Color(0xFF142412);
-  static const Color ghanaGold = Color(0xFFE1B12C);
-  static const Color nationalRed = Color(0xFFD63031);
-  static const Color successGreen = Color(0xFF2ED573);
-  static const Color darkCharcoal = Color(0xFF1A2519);
+  // GIS Theme Colors now resolve from GisPalette (light/dark aware).
 
   @override
   void initState() {
@@ -209,48 +205,191 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.transparent,
-      extendBodyBehindAppBar: true,
+      backgroundColor: GisPalette.of(context).bg,
       appBar: AppBar(
-        backgroundColor: gisDeepOlive.withValues(alpha: 0.93),
-        foregroundColor: Colors.white,
-        title: const Text(
+        backgroundColor: Colors.white,
+        foregroundColor: GisPalette.of(context).ink,
+        iconTheme: IconThemeData(color: GisPalette.of(context).primary),
+        elevation: 0,
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back_rounded,
+              color: GisPalette.of(context).primary),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Text(
           'Attendance History',
           style: TextStyle(
-            fontWeight: FontWeight.bold,
-            letterSpacing: 0.5,
-          ),
+              fontWeight: FontWeight.w800,
+              fontSize: 17,
+              color: GisPalette.of(context).ink),
         ),
-        elevation: 0,
-        centerTitle: true,
-        iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
+            icon: Icon(Icons.refresh_rounded, color: GisPalette.of(context).primary),
             onPressed: _loadHistory,
-            tooltip: 'Refresh Logs',
+            tooltip: 'Refresh history',
           ),
+          const SizedBox(width: 4),
+        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: GisPalette.of(context).hairline),
+        ),
+      ),
+      body: _historyLoading && _history.isEmpty
+          ? Center(
+              child: CircularProgressIndicator(color: GisPalette.of(context).primary),
+            )
+          : _history.isEmpty
+              ? _buildEmptyState()
+              : _buildHistoryList(),
+    );
+  }
+
+  List<Map<String, dynamic>> get _filtered {
+    if (_filter == 'Ongoing') {
+      return _history.where((r) => _isOpenRecord(r)).toList();
+    }
+    if (_filter == 'Completed') {
+      return _history.where((r) => !_isOpenRecord(r)).toList();
+    }
+    return _history;
+  }
+
+  int _totalMinutes() {
+    var total = 0;
+    for (final r in _history) {
+      num? minutes;
+      final raw = r['duration_minutes'];
+      if (raw != null) minutes = num.tryParse(raw.toString());
+      minutes ??= () {
+        final inTime = _clockIn(r);
+        final outTime = _clockOut(r);
+        if (inTime is String && outTime is String) {
+          try {
+            return DateTime.parse(outTime)
+                .difference(DateTime.parse(inTime))
+                .inMinutes;
+          } catch (_) {
+            return null;
+          }
+        }
+        return null;
+      }();
+      if (minutes != null) total += minutes.abs().round();
+    }
+    return total;
+  }
+
+  String _prettyHours(int totalMinutes) {
+    if (totalMinutes <= 0) return '0h';
+    final h = totalMinutes ~/ 60;
+    final m = totalMinutes % 60;
+    return m == 0 ? '${h}h' : '${h}h ${m}m';
+  }
+
+  Widget _summaryTile(
+      String value, String label, IconData icon, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: GisPalette.of(context).hairline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: 17, color: color),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                color: color),
+          ),
+          Text(label,
+              style:
+                  TextStyle(fontSize: 11.5, color: GisPalette.of(context).muted)),
         ],
       ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [gisDarkBackground, gisDeepOlive],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: SafeArea(
-          child: _historyLoading && _history.isEmpty
-              ? const Center(
-                  child: CircularProgressIndicator(
-                    valueColor: AlwaysStoppedAnimation<Color>(ghanaGold),
-                  ),
-                )
-              : _history.isEmpty
-                  ? _buildEmptyState()
-                  : _buildHistoryList(),
-        ),
+    );
+  }
+
+  Widget _buildSummary() {
+    final ongoing =
+        _history.where((r) => _isOpenRecord(r)).length;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+      child: Row(
+        children: [
+          Expanded(
+              child: _summaryTile('${_history.length}', 'Shifts',
+                  Icons.calendar_month_outlined, GisPalette.of(context).primary)),
+          const SizedBox(width: 10),
+          Expanded(
+              child: _summaryTile(
+                  _prettyHours(_totalMinutes()),
+                  'Hours worked',
+                  Icons.hourglass_top_rounded,
+                  GisPalette.of(context).goldDark)),
+          const SizedBox(width: 10),
+          Expanded(
+              child: _summaryTile(
+                  '$ongoing',
+                  'Ongoing',
+                  Icons.timelapse_rounded,
+                  ongoing > 0 ? GisPalette.of(context).danger : GisPalette.of(context).success)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilters() {
+    final ongoing =
+        _history.where((r) => _isOpenRecord(r)).length;
+    final counts = {
+      'All': _history.length,
+      'Ongoing': ongoing,
+      'Completed': _history.length - ongoing,
+    };
+    return SizedBox(
+      height: 40,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        children: [
+          for (final f in counts.keys)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text('$f · ${counts[f]}'),
+                selected: _filter == f,
+                onSelected: (_) => setState(() => _filter = f),
+                selectedColor: GisPalette.of(context).primary,
+                backgroundColor: Colors.white,
+                labelStyle: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: _filter == f ? Colors.white : GisPalette.of(context).ink,
+                ),
+                side: BorderSide(
+                  color: _filter == f ? GisPalette.of(context).primary : GisPalette.of(context).hairline,
+                ),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18)),
+                showCheckmark: false,
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -258,64 +397,51 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   Widget _buildEmptyState() {
     return Center(
       child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
+        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.1),
+              width: 88,
+              height: 88,
+              decoration: const BoxDecoration(
+                color: Color(0xFFE3EAE1),
                 shape: BoxShape.circle,
-                border: Border.all(
-                  color: ghanaGold.withValues(alpha: 0.35),
-                  width: 2,
-                ),
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.history_toggle_off_rounded,
-                size: 64,
-                color: ghanaGold,
+                size: 40,
+                color: GisPalette.of(context).primary,
               ),
             ),
-            const SizedBox(height: 24),
-            const Text(
-              'No Duty Records Found',
+            const SizedBox(height: 18),
+            Text(
+              'No duty records',
               style: TextStyle(
-                fontSize: 20,
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
+                fontSize: 17,
+                color: GisPalette.of(context).ink,
+                fontWeight: FontWeight.w700,
               ),
             ),
-            const SizedBox(height: 12),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 32),
-              child: Text(
-                'Your official deployment and shift logs will appear here. Pull down to refresh when new records arrive.',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.white70,
-                  height: 1.45,
-                ),
-                textAlign: TextAlign.center,
-              ),
+            const SizedBox(height: 8),
+            Text(
+              'Your clock in/out history will appear here once you start checking in.',
+              style: TextStyle(fontSize: 13, color: GisPalette.of(context).muted, height: 1.5),
+              textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 24),
-            ElevatedButton(
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
               onPressed: _loadHistory,
+              icon: const Icon(Icons.refresh_rounded, size: 18),
+              label: const Text('Refresh history'),
               style: ElevatedButton.styleFrom(
-                backgroundColor: ghanaGold,
-                foregroundColor: gisDarkBackground,
-                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                backgroundColor: GisPalette.of(context).primary,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 24, vertical: 14),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-              child: const Text(
-                'REFRESH HISTORY',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.8,
                 ),
               ),
             ),
@@ -326,31 +452,116 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   }
 
   Widget _buildHistoryList() {
+    final shown = _filtered;
     return RefreshIndicator(
-      color: ghanaGold,
-      backgroundColor: gisDeepOlive.withValues(alpha: 0.15),
+      color: GisPalette.of(context).primary,
       onRefresh: _loadHistory,
-      child: ListView.builder(
+      child: CustomScrollView(
         controller: _scrollController,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-        itemCount: _history.length + (_historyLoading ? 1 : 0),
-        itemBuilder: (context, index) {
-          if (index == _history.length) {
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(ghanaGold),
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          SliverToBoxAdapter(child: _buildSummary()),
+          SliverToBoxAdapter(child: _buildFilters()),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+            sliver: SliverGrid(
+              gridDelegate:
+                  const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 420,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                mainAxisExtent: 148,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  final record = shown[index];
+                  return _buildHistoryCard(record, _isOpenRecord(record));
+                },
+                childCount: shown.length,
+              ),
+            ),
+          ),
+          if (_historyLoading)
+            SliverToBoxAdapter(
+              child: Center(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: GisPalette.of(context).primary),
                 ),
               ),
-            );
-          }
+            ),
+        ],
+      ),
+    );
+  }
 
-          final record = _history[index];
-          final isOpen = _isOpenRecord(record);
+  String _formatShortTime(dynamic time) {
+    if (time == null) return "--:--";
+    if (time is String) {
+      try {
+        final dt = DateTime.parse(time).toLocal();
+        return DateFormat('HH:mm').format(dt);
+      } catch (_) {
+        return time.toString();
+      }
+    }
+    return time.toString();
+  }
 
-          return _buildHistoryCard(record, isOpen);
-        },
+  /// Compact "8h 5m" duration for the grid card.
+  String _shortDuration(Map<String, dynamic> record) {
+    num? minutes;
+    final rawMinutes = record['duration_minutes'];
+    if (rawMinutes != null) {
+      minutes = num.tryParse(rawMinutes.toString());
+    }
+    if (minutes == null) {
+      final inTime = _clockIn(record);
+      final outTime = _clockOut(record);
+      if (inTime is String && outTime is String) {
+        try {
+          minutes = DateTime.parse(outTime)
+              .difference(DateTime.parse(inTime))
+              .inMinutes;
+        } catch (_) {
+          minutes = null;
+        }
+      }
+    }
+    if (minutes == null) return "-";
+    final total = minutes.abs().round();
+    final h = total ~/ 60;
+    final m = total % 60;
+    return m == 0 ? "${h}h" : "${h}h ${m}m";
+  }
+
+  Widget _miniStat(String label, String value, Color color) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              color: GisPalette.of(context).muted,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.6,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -363,217 +574,96 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     final dateValue = record['date'] ?? clockInTime;
     final notes = record['notes']?.toString() ?? '';
 
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 10),
-      elevation: isOpen ? 6 : 2,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(
-          color: isOpen ? ghanaGold : Colors.white.withValues(alpha: 0.12),
-          width: isOpen ? 2.2 : 1,
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isOpen ? GisPalette.of(context).gold : GisPalette.of(context).hairline,
+          width: isOpen ? 1.6 : 1,
         ),
       ),
-      color: isOpen ? Colors.white.withValues(alpha: 0.95) : Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header: Date and Status Accent
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.calendar_month_outlined,
-                        color: gisDeepOlive,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        _formatDate(dateValue),
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                          color: darkCharcoal,
-                        ),
-                      ),
-                    ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.calendar_month_outlined,
+                  color: GisPalette.of(context).primary, size: 15),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  _formatDate(dateValue),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: GisPalette.of(context).ink,
                   ),
                 ),
-                if (isOpen)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: ghanaGold.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: ghanaGold.withValues(alpha: 0.8), width: 1.2),
-                    ),
-                    child: const Text(
-                      'ONGOING DUTY',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF9E7500),
-                        letterSpacing: 0.6,
-                      ),
-                    ),
-                  )
-                else
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: successGreen.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Text(
-                      'COMPLETED',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF208B3A),
-                        letterSpacing: 0.6,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Divider(height: 1, thickness: 1, color: Color(0xFFEEEEEE)),
-            ),
-
-            // Timings Area
-            _buildTimeRow(
-              label: 'Clock In (Duty Start)',
-              time: _formatTime(clockInTime),
-              icon: Icons.login_rounded,
-              color: successGreen,
-            ),
-            const SizedBox(height: 16),
-            _buildTimeRow(
-              label: 'Clock Out (Duty End)',
-              time: clockOutTime == null ? 'Pending Sign-out' : _formatTime(clockOutTime),
-              icon: Icons.logout_rounded,
-              color: clockOutTime == null ? ghanaGold : nationalRed,
-            ),
-            const SizedBox(height: 16),
-            _buildTimeRow(
-              label: 'Total Hours Worked',
-              time: _formatDuration(record),
-              icon: Icons.hourglass_top_rounded,
-              color: gisDeepOlive,
-            ),
-
-            // Optional Notes Section (from backend)
-            if (notes.isNotEmpty) ...[
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Divider(height: 1, thickness: 1, color: Color(0xFFE7E0CD)),
               ),
-              _buildInfoRow(
-                label: 'Officer Notes',
-                value: notes,
-                icon: Icons.rate_review_rounded,
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: isOpen
+                      ? const Color(0xFFFBF1D8)
+                      : const Color(0xFFE1F9EC),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  isOpen ? 'ONGOING' : 'DONE',
+                  style: TextStyle(
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5,
+                    color: isOpen
+                        ? const Color(0xFF9E7500)
+                        : const Color(0xFF14663A),
+                  ),
+                ),
               ),
             ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _miniStat('IN', _formatShortTime(clockInTime),
+                  const Color(0xFF14663A)),
+              _miniStat(
+                  'OUT',
+                  clockOutTime == null
+                      ? 'Pending'
+                      : _formatShortTime(clockOutTime),
+                  clockOutTime == null ? GisPalette.of(context).goldDark : GisPalette.of(context).danger),
+              _miniStat(
+                  'HRS', _shortDuration(record), GisPalette.of(context).primary),
+            ],
+          ),
+          if (notes.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.sticky_note_2_outlined,
+                    size: 12, color: GisPalette.of(context).muted),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    notes,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 11.5, color: GisPalette.of(context).muted),
+                  ),
+                ),
+              ],
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
   
-  Widget _buildTimeRow({
-    required String label,
-    required String time,
-    required IconData icon,
-    required Color color,
-  }) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(icon, size: 18, color: color),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.grey.shade500,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.4,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                time,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: darkCharcoal,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildInfoRow({
-    required String label,
-    required String value,
-    required IconData icon,
-  }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 18, color: Colors.grey.shade600),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.grey.shade500,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: darkCharcoal,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
 }

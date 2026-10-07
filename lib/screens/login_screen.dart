@@ -2,14 +2,22 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:gis_attendance/services/auth_service.dart';
+import 'package:gis_attendance/services/notification_service.dart';
+import 'package:gis_attendance/services/two_factor_service.dart';
 import 'home_screen.dart';
 import 'register_screen.dart';
+import 'otp_verification_screen.dart';
 import 'package:gis_attendance/widgets/loading_indicator.dart';
+import 'package:gis_attendance/theme/gis_palette.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  /// When true the user just signed out: show a "signed out" note plus a
+  /// "Close app" option underneath the form.
+  final bool fromLogout;
+  const LoginScreen({super.key, this.fromLogout = false});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -25,17 +33,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
   final AuthService _authService = AuthService();
   final LocalAuthentication _localAuth = LocalAuthentication();
+  final TwoFactorService _twoFactor = TwoFactorService();
 
 
   bool _biometricAvailable = false;
   bool _hasStoredCredentials = false;
 
-  // GIS Theme Colors
-  static const Color gisDeepOlive = Color(0xFF2E4D2A);
-  static const Color gisDarkBackground = Color(0xFF142412);
-  static const Color ghanaGold = Color(0xFFE1B12C);
-  static const Color nationalRed = Color(0xFFD63031);
-  static const Color lightGrayBg = Color(0xFFF5F6F5);
+  // GIS Theme Colors now resolve from GisPalette (light/dark aware).
 
   @override
   void initState() {
@@ -154,12 +158,14 @@ class _LoginScreenState extends State<LoginScreen> {
       });
 
       if (result.success) {
-        if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const HomeScreen()),
-          );
-        }
+        await _enterAfterPassword(username, viaBiometrics: false);
       } else {
+        NotificationService.logActivity(
+          'Sign-in failed',
+          'Failed sign-in attempt for officer $username.',
+          category: 'Security',
+          loginEvent: true,
+        );
         setState(() {
           _error = result.message;
         });
@@ -172,6 +178,102 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() {
         _loading = false;
         _error = "An error occurred during login.";
+      });
+    }
+  }
+
+  /// Shared post-password gate: plain sign-in when 2FA is OFF (default),
+  /// otherwise send an email OTP and only enter Home after it verifies.
+  /// The session is discarded if the code step is cancelled so the token
+  /// alone can't be used to bypass the second factor.
+  Future<void> _enterAfterPassword(String username,
+      {required bool viaBiometrics}) async {
+    final label = viaBiometrics ? ' with biometrics' : '';
+    // Effective gate: System Config switch AND this officer's opt-in.
+    // Ships dormant (both default OFF) until SMTP is live and enabled.
+    final enabled = await _twoFactor.isRequiredFor(username);
+    if (!enabled) {
+      NotificationService.logActivity(
+        'Signed in',
+        'Officer $username signed in$label.',
+        category: 'Security',
+        loginEvent: true,
+      );
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+        );
+      }
+      return;
+    }
+
+    final profile = await _authService.getStoredProfile();
+    final email = (profile?['email'] ?? '').toString().trim();
+    if (email.isEmpty || !RegExp(r'\S+@\S+\.\S+').hasMatch(email)) {
+      // Fail open (don't lock the officer out) but say so plainly.
+      NotificationService.logActivity(
+        'Signed in',
+        'Officer $username signed in$label (2FA skipped — no email).',
+        category: 'Security',
+        loginEvent: true,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                '2FA is on but no email is on file — signed in without the code. Update your email in Settings.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+        );
+      }
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    final sent = await _twoFactor.sendOtp(
+      officerIdOrUsername: username,
+      email: email,
+    );
+    if (!mounted) return;
+    setState(() => _loading = false);
+
+    if (!sent.ok) {
+      await _authService.logout();
+      setState(() => _error = sent.message);
+      return;
+    }
+
+    final verified = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => OtpVerificationScreen(
+          officerIdOrUsername: username,
+          email: email,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (verified == true) {
+      NotificationService.logActivity(
+        'Signed in',
+        'Officer $username signed in$label (2FA verified).',
+        category: 'Security',
+        loginEvent: true,
+      );
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+      );
+    } else {
+      await _authService.logout();
+      setState(() {
+        _error = 'Verification cancelled — you are still signed out.';
       });
     }
   }
@@ -244,10 +346,15 @@ class _LoginScreenState extends State<LoginScreen> {
       });
 
       if (result.success) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
+        await _enterAfterPassword(credentials['username']!,
+            viaBiometrics: true);
       } else {
+        NotificationService.logActivity(
+          'Sign-in failed',
+          "Failed biometric sign-in for officer ${credentials['username']}.",
+          category: 'Security',
+          loginEvent: true,
+        );
         setState(() {
           _error = result.message;
         });
@@ -259,7 +366,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = 'An error occurred during biometric login.';
+        _error = 'Biometric error: $e';
       });
     }
   }
@@ -270,86 +377,121 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(
-        children: [
-          // Background Gradient (Deep Secure GIS Olive to Vigilant Dark Forest Green)
-          Container(
-            width: double.infinity,
-            height: double.infinity,
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  gisDarkBackground,
-                  gisDeepOlive,
-                ],
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-              ),
+  /// Exit the app from the sign-in page (offered after a logout). Web
+  /// can't close the window programmatically, so the button is hidden
+  /// there.
+  Future<void> _closeApp() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Close app?',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        content: const Text('The app will be closed.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Stay',
+                style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: GisPalette.of(context).primary,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
             ),
-            child: Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // GIS Themed Crest/Logo Placeholder
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.1),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: ghanaGold.withValues(alpha: 0.5),
-                          width: 2,
-                        ),
-                      ),
-                      child: SizedBox(
-                        height: 80,
-                        width: 80,
-                        child: ImageIcon(
-                          const AssetImage('assets/default_avatar.png'),
-                          color: ghanaGold, // Changed default icon to represent GIS Gold
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
+            child: const Text('Close app'),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      SystemNavigator.pop();
+    }
+  }
 
-                    // Official Title
-                    const Text(
-                      "Ghana Immigration Service",
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                        letterSpacing: 0.5,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 4),
+  /// Side image for wide screens (left panel, larger, full height).
+  Widget _buildSideImage() {
+    return Container(
+      height: double.infinity,
+      width: double.infinity,
+      color: GisPalette.of(context).darkBg,
+      child: Image.asset(
+        'assets/login.png',
+        fit: BoxFit.cover,
+        alignment: Alignment.center,
+        errorBuilder: (_, __, ___) => Center(
+          child: Icon(Icons.shield_outlined, color: GisPalette.of(context).gold, size: 64),
+        ),
+      ),
+    );
+  }
 
-                    // Motto Subtitle (Friendship with Vigilance)
-                    const Text(
-                      "Friendship with Vigilance",
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontStyle: FontStyle.italic,
-                        fontWeight: FontWeight.w500,
-                        color: ghanaGold, // Highlights motto in Gold
-                        letterSpacing: 1.0,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 30),
+  /// Top banner for narrow screens.
+  Widget _buildTopBanner() {
+    return ClipRRect(
+      borderRadius: const BorderRadius.only(
+        bottomLeft: Radius.circular(28),
+        bottomRight: Radius.circular(28),
+      ),
+      child: Image.asset(
+        'assets/login.png',
+        width: double.infinity,
+        height: 250,
+        fit: BoxFit.cover,
+        alignment: Alignment.center,
+        errorBuilder: (_, __, ___) => Container(
+          width: double.infinity,
+          height: 250,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [GisPalette.of(context).darkBg, GisPalette.of(context).primary],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+          ),
+          child: Center(
+            child: Icon(Icons.shield_outlined, color: GisPalette.of(context).gold, size: 64),
+          ),
+        ),
+      ),
+    );
+  }
 
-                    // Login Card
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 30,
-                        horizontal: 20,
-                      ),
+  Widget _buildFooter() {
+    return Column(
+      children: [
+        Text(
+          "© ${DateTime.now().year} Ghana Immigration Service (GIS)",
+          style: TextStyle(
+            color: Colors.grey.shade600,
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          "Safe Migration, Secure Ghana",
+          style: TextStyle(
+            color: Colors.grey.shade500,
+            fontSize: 11,
+            fontStyle: FontStyle.italic,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Shared login form card (used by both wide and narrow layouts).
+  Widget _buildLoginCard() {
+    return Container(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 26,
+                                horizontal: 20,
+                              ),
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(20),
@@ -365,13 +507,32 @@ class _LoginScreenState extends State<LoginScreen> {
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // Card header — banner already carries GIS branding
+                          Text(
+                            "Welcome back",
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              color: GisPalette.of(context).primary,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            "Sign in with your Officer ID to continue",
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+
                           // Username Label
-                          const Text(
+                          Text(
                             "Officer ID",
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.bold,
-                              color: gisDeepOlive, // Brand color labels
+                              color: GisPalette.of(context).primary, // Brand color labels
                             ),
                           ),
                           const SizedBox(height: 8),
@@ -385,12 +546,12 @@ class _LoginScreenState extends State<LoginScreen> {
                             decoration: InputDecoration(
                               hintText: "Enter your officer ID",
                               hintStyle: TextStyle(color: Colors.grey.shade400),
-                              prefixIcon: const Icon(
+                              prefixIcon: Icon(
                                 Icons.person_outline_rounded,
-                                color: gisDeepOlive,
+                                color: GisPalette.of(context).primary,
                               ),
                               filled: true,
-                              fillColor: lightGrayBg,
+                              fillColor: GisPalette.of(context).bg,
                               contentPadding: const EdgeInsets.symmetric(vertical: 18),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
@@ -398,8 +559,8 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: const BorderSide(
-                                  color: gisDeepOlive,
+                                borderSide: BorderSide(
+                                  color: GisPalette.of(context).primary,
                                   width: 2.0,
                                 ),
                               ),
@@ -408,12 +569,12 @@ class _LoginScreenState extends State<LoginScreen> {
                           const SizedBox(height: 18),
 
                           // Password Label
-                          const Text(
+                          Text(
                             "Secure Password",
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.bold,
-                              color: gisDeepOlive,
+                              color: GisPalette.of(context).primary,
                             ),
                           ),
                           const SizedBox(height: 8),
@@ -427,16 +588,16 @@ class _LoginScreenState extends State<LoginScreen> {
                             decoration: InputDecoration(
                               hintText: "Enter your password",
                               hintStyle: TextStyle(color: Colors.grey.shade400),
-                              prefixIcon: const Icon(
+                              prefixIcon: Icon(
                                 Icons.lock_outline_rounded,
-                                color: gisDeepOlive,
+                                color: GisPalette.of(context).primary,
                               ),
                               suffixIcon: IconButton(
                                 icon: Icon(
                                   _obscureText
                                       ? Icons.visibility_off_outlined
                                       : Icons.visibility_outlined,
-                                  color: gisDeepOlive.withValues(alpha: 0.7),
+                                  color: GisPalette.of(context).primary.withValues(alpha: 0.7),
                                 ),
                                 onPressed: () {
                                   setState(() {
@@ -445,7 +606,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 },
                               ),
                               filled: true,
-                              fillColor: lightGrayBg,
+                              fillColor: GisPalette.of(context).bg,
                               contentPadding: const EdgeInsets.symmetric(vertical: 18),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
@@ -453,8 +614,8 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: const BorderSide(
-                                  color: gisDeepOlive,
+                                borderSide: BorderSide(
+                                  color: GisPalette.of(context).primary,
                                   width: 2.0,
                                 ),
                               ),
@@ -468,16 +629,16 @@ class _LoginScreenState extends State<LoginScreen> {
                               width: double.infinity,
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                color: nationalRed.withValues(alpha: 0.1),
+                                color: GisPalette.of(context).danger.withValues(alpha: 0.1),
                                 borderRadius: BorderRadius.circular(10),
                                 border: Border.all(
-                                  color: nationalRed.withValues(alpha: 0.3),
+                                  color: GisPalette.of(context).danger.withValues(alpha: 0.3),
                                 ),
                               ),
                               child: Text(
                                 _error!,
-                                style: const TextStyle(
-                                  color: nationalRed,
+                                style: TextStyle(
+                                  color: GisPalette.of(context).danger,
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -492,14 +653,14 @@ class _LoginScreenState extends State<LoginScreen> {
                             child: ElevatedButton(
                               onPressed: _loading ? null : _login,
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: gisDeepOlive,
+                                backgroundColor: GisPalette.of(context).primary,
                                 disabledBackgroundColor: Colors.grey.shade400,
                                 padding: const EdgeInsets.symmetric(vertical: 16),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 elevation: 4,
-                                shadowColor: gisDeepOlive.withValues(alpha: 0.5),
+                                shadowColor: GisPalette.of(context).primary.withValues(alpha: 0.5),
                               ),
                               child: Text(
                                 _loading ? "Authenticating..." : "SECURE SIGN IN",
@@ -520,23 +681,23 @@ class _LoginScreenState extends State<LoginScreen> {
                               width: double.infinity,
                               child: OutlinedButton.icon(
                                 onPressed: _loading ? null : _loginWithBiometrics,
-                                icon: const Icon(
+                                icon: Icon(
                                   Icons.fingerprint,
-                                  color: ghanaGold,
+                                  color: GisPalette.of(context).gold,
                                   size: 24,
                                 ),
-                                label: const Text(
+                                label: Text(
                                   'Sign In with Biometrics',
                                   style: TextStyle(
-                                    color: gisDeepOlive,
+                                    color: GisPalette.of(context).primary,
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
                                 style: OutlinedButton.styleFrom(
-                                  foregroundColor: gisDeepOlive,
+                                  foregroundColor: GisPalette.of(context).primary,
                                   disabledForegroundColor: Colors.grey.shade300,
-                                  side: const BorderSide(
-                                    color: ghanaGold,
+                                  side: BorderSide(
+                                    color: GisPalette.of(context).gold,
                                     width: 1.5,
                                   ),
                                   shape: RoundedRectangleBorder(
@@ -551,14 +712,14 @@ class _LoginScreenState extends State<LoginScreen> {
                               width: double.infinity,
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                color: ghanaGold.withValues(alpha: 0.1),
+                                color: GisPalette.of(context).gold.withValues(alpha: 0.1),
                                 borderRadius: BorderRadius.circular(10),
                               ),
-                              child: const Text(
+                              child: Text(
                                 'Biometric login is inactive on this device',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: gisDeepOlive,
+                                  color: GisPalette.of(context).primary,
                                   fontWeight: FontWeight.w500,
                                 ),
                                 textAlign: TextAlign.center,
@@ -602,10 +763,10 @@ class _LoginScreenState extends State<LoginScreen> {
                             child: OutlinedButton(
                               onPressed: _loading ? null : _navigateToRegister,
                               style: OutlinedButton.styleFrom(
-                                foregroundColor: gisDeepOlive,
+                                foregroundColor: GisPalette.of(context).primary,
                                 disabledForegroundColor: Colors.grey.shade300,
                                 side: BorderSide(
-                                  color: gisDeepOlive.withValues(alpha: 0.5),
+                                  color: GisPalette.of(context).primary.withValues(alpha: 0.5),
                                   width: 1.5,
                                 ),
                                 shape: RoundedRectangleBorder(
@@ -613,45 +774,135 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                                 padding: const EdgeInsets.symmetric(vertical: 16),
                               ),
-                              child: const Text(
+                              child: Text(
                                 "CREATE ACCOUNT",
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   fontSize: 16,
                                   letterSpacing: 0.5,
-                                  color: gisDeepOlive,
+                                  color: GisPalette.of(context).primary,
                                 ),
                               ),
                             ),
                           ),
 
+                          // After a logout: signed-out note + Close app option.
+                          if (widget.fromLogout && !kIsWeb) ...[
+                            const SizedBox(height: 12),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: GisPalette.of(context)
+                                    .primary
+                                    .withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Text(
+                                'You have been signed out.',
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              width: double.infinity,
+                              child: TextButton.icon(
+                                onPressed:
+                                    _loading ? null : _closeApp,
+                                icon: const Icon(
+                                    Icons.close_rounded,
+                                    size: 18),
+                                label: const Text(
+                                  'Close app',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w700),
+                                ),
+                              ),
+                            ),
+                          ],
+
                         ],
                       ),
-                    ),
-                    const SizedBox(height: 32),
+    );
+  }
 
-                    // Official Footer Info
-                    Text(
-                      "© ${DateTime.now().year} Ghana Immigration Service (GIS)",
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
+  @override
+  Widget build(BuildContext context) {
+    final wide = MediaQuery.of(context).size.width >= 800;
+    if (wide) {
+      // Wide grid: image on the left (larger, full height),
+      // form on the right (smaller).
+      return Scaffold(
+        backgroundColor: GisPalette.of(context).bg,
+        body: Stack(
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(flex: 3, child: _buildSideImage()),
+                Expanded(
+                  flex: 2,
+                  child: Center(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 32, vertical: 28),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 420),
+                        child: Column(
+                          children: [
+                            _buildLoginCard(),
+                            const SizedBox(height: 24),
+                            _buildFooter(),
+                          ],
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      "ICT & Digital Transformation Division",
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.5),
-                        fontSize: 11,
-                      ),
-                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (_loading) const StylishLoadingIndicator(),
+          ],
+        ),
+      );
+    }
+    return Scaffold(
+      backgroundColor: GisPalette.of(context).bg,
+      body: Stack(
+        children: [
+          // Light background with GIS hero banner (assets/login.png)
+          SingleChildScrollView(
+            child: Column(
+              children: [
+                _buildTopBanner(),
+
+                // --- Form area (overlaps banner, constrained for web) ---
+                Transform.translate(
+                  offset: const Offset(0, -28),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 480),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Column(
+                          children: [
+                            _buildLoginCard(),
+                            const SizedBox(height: 24),
+                            _buildFooter(),
+                            const SizedBox(height: 24),
                   ],
                 ),
               ),
             ),
-          ),
+            ), // Center
+          ), // Transform.translate
+        ], // outer Column
+      ), // outer Column
+    ), // SingleChildScrollView,
 
           // Loading Indicator Overlay
           if (_loading)

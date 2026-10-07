@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:gis_attendance/config/app_config.dart';
 import 'package:gis_attendance/services/api_result.dart';
+import 'package:gis_attendance/services/config_service.dart';
 import 'package:gis_attendance/utils/app_log.dart';
 
 class ProfileUpdateResult {
@@ -216,6 +217,29 @@ class AuthService {
     final profile = await getStoredProfile();
     if ((profile?['role']?.toString() ?? 'officer') != 'admin') return false;
     return (await getAdminToken()) != null;
+  }
+
+  /// The officer's role string straight from the stored profile
+  /// ('officer', 'admin' or 'super_admin'). Defaults to 'officer'.
+  Future<String> currentRole() async {
+    final profile = await getStoredProfile();
+    return (profile?['role']?.toString() ?? 'officer').toLowerCase();
+  }
+
+  /// True when the session belongs to a super admin. Super admins outrank
+  /// admins: they pass every admin gate plus super-admin-only gates
+  /// (duty-roster PDF, role management). Unlike [isAdmin] this does not
+  /// require an admin bearer token, because the backend only mints
+  /// `admin_token` for `role == 'admin'` — API calls still enforce their
+  /// own server-side checks.
+  Future<bool> isSuperAdmin() async {
+    return (await currentRole()) == 'super_admin';
+  }
+
+  /// True for admins AND super admins (either may enter the admin surface).
+  Future<bool> isAdminOrSuper() async {
+    if (await isSuperAdmin()) return true;
+    return isAdmin();
   }
 
   /// The admin token is `base64url(jsonClaims).signature`; claims carry
@@ -650,14 +674,17 @@ class AuthService {
     };
   }
 
-  /// Generate and store JWT-like token
+  /// Generate and store JWT-like token. Lifetime comes from System
+  /// Config (default 24h) and is stamped into the token at sign-in, so a
+  /// changed value applies from the next sign-in, not mid-session.
   Future<void> _generateAndStoreToken(
       Map<String, dynamic> loginData, String username) async {
     try {
       final profile = _flattenProfile(loginData, username);
 
       final now = DateTime.now();
-      final expiry = now.add(const Duration(hours: 24));
+      final sessionHours = await ConfigService.sessionHours();
+      final expiry = now.add(Duration(hours: sessionHours));
 
       final userInfo = {
         ...profile,

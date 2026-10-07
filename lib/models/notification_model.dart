@@ -21,16 +21,24 @@ class NotificationItem {
     'message': message,
     'category': category,
     'timestamp': timestamp.toIso8601String(),
+    'is_read': isRead,
   };
 
   factory NotificationItem.fromJson(Map<String, dynamic> json, {String? forcedCategory}) {
+    DateTime ts;
+    try {
+      ts = DateTime.parse(json['created_at'] ?? json['timestamp'] ?? DateTime.now().toIso8601String());
+    } catch (_) {
+      ts = DateTime.now();
+    }
     return NotificationItem(
       id: json['id'] ?? 0,
       title: json['title'] ?? 'No Title',
       message: json['message'] ?? '',
       category: forcedCategory ?? json['category'] ?? 'In-App Notification',
       // Parsing the API date format: "2025-12-29T10:16:06.000Z"
-      timestamp: DateTime.parse(json['created_at'] ?? json['timestamp'] ?? DateTime.now().toIso8601String()),
+      timestamp: ts,
+      isRead: json['is_read'] == true || json['isRead'] == true,
     );
   }
 }

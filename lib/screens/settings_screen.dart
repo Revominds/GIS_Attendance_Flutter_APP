@@ -8,6 +8,14 @@ import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:gis_attendance/services/auth_service.dart';
 import 'package:gis_attendance/services/attendance_service.dart';
+import 'package:gis_attendance/services/config_service.dart';
+import 'package:gis_attendance/services/notification_service.dart';
+import 'package:gis_attendance/services/two_factor_service.dart';
+import 'package:gis_attendance/services/update_service.dart';
+import 'package:gis_attendance/theme/gis_palette.dart';
+import 'package:gis_attendance/widgets/app_update.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:gis_attendance/screens/otp_verification_screen.dart';
 
 
 class SettingsScreen extends StatefulWidget {
@@ -57,25 +65,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _localAuth = LocalAuthentication();
   final _picker = ImagePicker();
 
-  // GIS theme — matches the home & notifications screens for a consistent brand feel.
-  static const Color gisDeepOlive = Color(0xFF2E4D2A);
-  // static const Color gisDarkBackground = Color(0xFF142412);
-  static const Color ghanaGold = Color(0xFFE1B12C);
-  static const Color goldText = Color(0xFF8A6D1D);
-  static const Color nationalRed = Color(0xFFD63031);
-  static const Color darkCharcoal = Color(0xFF1A2519);
-  static const Color lightGrayBg = Color(0xFFF5F6F5);
-  static const Color mutedText = Color(0xFF6E7A6C);
-  static const Color hairline = Color(0xFFE7E9E4);
-  static const Color goldTint = Color(0xFFFBF1D8);
-  static const Color oliveTint = Color(0xFFE3EAE1);
+  // GIS theme resolves from GisPalette (light only).
 
   bool _biometricsEnabled = true;
   bool _canCheckBiometrics = false;
+  String _currentVersion = '';
+  bool _updateChecking = false;
   File? _profileImage;
   File? _newProfileImage;
   bool _isSaving = false;
   Uint8List? imageBytes;
+
+  // Two-factor authentication (email OTP). Defaults to OFF — only true
+  // after the officer explicitly enables + verifies it below.
+  final _twoFactor = TwoFactorService();
+  bool _twoFactorEnabled = false;
+  bool _twoFactorBusy = false;
+  // Global kill-switch from System Config (admin). The card stays visible
+  // either way so it's ready to use once SMTP is configured and an admin
+  // flips it on; enabling is blocked until then.
+  bool _twoFactorAllowedByConfig = false;
 
 
   final _fullNameController = TextEditingController();
@@ -151,9 +160,215 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       _canCheckBiometrics = false;
     }
+    try {
+      final pkg = await PackageInfo.fromPlatform();
+      _currentVersion = pkg.version;
+    } catch (_) {
+      _currentVersion = '';
+    }
     if (mounted) {
       setState(() {});
     }
+    // 2FA toggle is per-officer and defaults to OFF — refresh once the
+    // cached profile (username) is available.
+    _refreshTwoFactorFlag();
+  }
+
+  /// Manual "Check for updates" — downloads + installs over the current
+  /// app, keeping all data. No uninstall needed.
+  Future<void> _manualUpdateCheck() async {
+    if (_updateChecking) return;
+    setState(() => _updateChecking = true);
+    try {
+      final result = await UpdateService.check();
+      if (!mounted) return;
+      setState(() => _updateChecking = false);
+      if (result.update != null) {
+        await AppUpdate.prompt(context, result.update!);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(result.message)),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _updateChecking = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Update check failed: $e')),
+      );
+    }
+  }
+
+  Future<void> _refreshTwoFactorFlag() async {
+    try {
+      final stored = await _authService.getStoredProfile();
+      final key = _twoFactorKey(stored);
+      final enabled = await _twoFactor.isEnabled(key);
+      final allowed = await ConfigService.twoFactorAllowed();
+      if (mounted) {
+        setState(() {
+          _twoFactorEnabled = enabled;
+          _twoFactorAllowedByConfig = allowed;
+        });
+      }
+    } catch (_) {
+      // stays OFF on any failure
+    }
+  }
+
+  String _twoFactorKey([Map<String, dynamic>? profile]) {
+    final username = _usernameController.text.trim().isNotEmpty
+        ? _usernameController.text.trim()
+        : (profile?['username'] ?? profile?['officerId'] ?? 'unknown')
+            .toString();
+    return _twoFactor.keyFor(username);
+  }
+
+  String _twoFactorEmail([Map<String, dynamic>? profile]) {
+    if (_emailController.text.trim().isNotEmpty) {
+      return _emailController.text.trim();
+    }
+    return (profile?['email'] ?? '').toString().trim();
+  }
+
+  /// Enabling = send OTP -> verify on the OTP screen -> persist ON.
+  /// Disabling = confirm dialog -> persist OFF. The switch visually
+  /// reverts on any cancel/failure so it never lies about the state.
+  Future<void> _toggleTwoFactor(bool value, Map<String, dynamic> profile) async {
+    if (_twoFactorBusy) return;
+    if (value == _twoFactorEnabled) return;
+
+    final officerKey = _twoFactorKey(profile);
+    final email = _twoFactorEmail(profile);
+
+    if (value) {
+      // Global switch (System Config) must be on first — it stays OFF
+      // until the server mailer is configured.
+      final allowed = await ConfigService.twoFactorAllowed();
+      if (mounted) setState(() => _twoFactorAllowedByConfig = allowed);
+      if (!allowed) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  'Two-factor authentication is not enabled by your administrator yet. Ask an admin to turn it on in System Config once email is working.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+      if (email.isEmpty || !RegExp(r'\S+@\S+\.\S+').hasMatch(email)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  'Add a valid email to your profile first — the code is sent there.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+      setState(() => _twoFactorBusy = true);
+      final sent = await _twoFactor.sendOtp(
+        officerIdOrUsername: officerKey,
+        email: email,
+      );
+      if (!mounted) return;
+      setState(() => _twoFactorBusy = false);
+      if (!sent.ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(sent.message), backgroundColor: Colors.red),
+        );
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(sent.message), backgroundColor: Colors.green),
+      );
+      final verified = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => OtpVerificationScreen(
+            officerIdOrUsername: officerKey,
+            email: email,
+            title: 'Verify your email',
+            subtitle:
+                'Enter the 6-digit code we just sent to ${_twoFactor.maskEmail(email)} to turn on two-factor authentication.',
+            confirmLabel: 'Verify & Enable',
+          ),
+        ),
+      );
+      if (!mounted) return;
+      if (verified == true) {
+        await _twoFactor.setEnabled(officerKey, true);
+        setState(() => _twoFactorEnabled = true);
+        NotificationService.logActivity(
+          'Two-factor authentication enabled',
+          'Email OTP sign-in was turned on.',
+          category: 'Security',
+        );
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Two-factor authentication enabled.'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        await _twoFactor.clearOtp(officerKey);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Verification cancelled — 2FA stays off.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    // Turning OFF — confirm so an accidental tap doesn't drop protection.
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Turn off 2FA?',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        content: const Text(
+            'You will sign in with just your officer ID and password.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Keep it on',
+                style: TextStyle(color: Colors.grey.shade600)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: GisPalette.of(context).danger,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Turn off'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    await _twoFactor.setEnabled(officerKey, false);
+    setState(() => _twoFactorEnabled = false);
+    NotificationService.logActivity(
+      'Two-factor authentication disabled',
+      'Email OTP sign-in was turned off.',
+      category: 'Security',
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Two-factor authentication disabled.'),
+        backgroundColor: Colors.orange,
+      ),
+    );
   }
 
   Future<Map<String, dynamic>> _fetchProfile() async {
@@ -170,6 +385,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _profileImage != null ? Image.file(_profileImage!, fit: BoxFit.cover)
             : const Icon(Icons.account_circle, size: 100, color: Colors.grey);
 
+        // Profile (username) is now known — resolve the per-officer 2FA
+        // flag (defaults to OFF).
+        _refreshTwoFactorFlag();
         return user;
       } else {
         throw Exception('User profile not found.');
@@ -194,8 +412,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 leading: Container(
                   width: 36,
                   height: 36,
-                  decoration: BoxDecoration(color: oliveTint, borderRadius: BorderRadius.circular(10)),
-                  child: const Icon(Icons.camera_alt, color: gisDeepOlive, size: 19),
+                  decoration: BoxDecoration(color: GisPalette.of(context).oliveTint, borderRadius: BorderRadius.circular(10)),
+                  child: Icon(Icons.camera_alt, color: GisPalette.of(context).primary, size: 19),
                 ),
                 title: const Text('Camera'),
                 onTap: () {
@@ -207,8 +425,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 leading: Container(
                   width: 36,
                   height: 36,
-                  decoration: BoxDecoration(color: goldTint, borderRadius: BorderRadius.circular(10)),
-                  child: const Icon(Icons.photo_library, color: goldText, size: 19),
+                  decoration: BoxDecoration(color: GisPalette.of(context).goldTint, borderRadius: BorderRadius.circular(10)),
+                  child: Icon(Icons.photo_library, color: GisPalette.of(context).goldText, size: 19),
                 ),
                 title: const Text('Gallery'),
                 onTap: () {
@@ -288,6 +506,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           if (mounted) {
             setState(() => _biometricsEnabled = true);
+            NotificationService.logActivity(
+              'Biometric login enabled',
+              'Biometric sign-in was turned on for this device.',
+              category: 'Security',
+            );
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text('Biometric login enabled successfully!'),
@@ -320,6 +543,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       if (mounted) {
         setState(() => _biometricsEnabled = false);
+        NotificationService.logActivity(
+          'Biometric login disabled',
+          'Biometric sign-in was turned off and saved credentials cleared.',
+          category: 'Security',
+        );
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Biometric login disabled'),
@@ -356,7 +584,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 decoration: InputDecoration(
                   labelText: 'Password',
                   filled: true,
-                  fillColor: lightGrayBg,
+                  fillColor: GisPalette.of(context).bg,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide.none,
@@ -388,7 +616,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ? () => Navigator.pop(context, true)
                   : null,
               style: ElevatedButton.styleFrom(
-                backgroundColor: gisDeepOlive,
+                backgroundColor: GisPalette.of(context).primary,
                 foregroundColor: Colors.white,
                 disabledBackgroundColor: Colors.grey.shade300,
                 elevation: 0,
@@ -502,6 +730,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isSaving = false);
 
     if (failures.isEmpty) {
+      NotificationService.logActivity(
+        'Profile settings saved',
+        'Officer $officerId updated ${successes.join(' and ')}.',
+        category: 'System',
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Saved ${successes.join(' and ')}.'),
@@ -516,6 +749,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (successes.isNotEmpty) 'Saved ${successes.join(' and ')}.',
       'Couldn\'t save ${failures.join('; ')}.',
     ];
+    if (successes.isNotEmpty) {
+      NotificationService.logActivity(
+        'Profile settings saved',
+        'Officer $officerId updated ${successes.join(' and ')}.',
+        category: 'System',
+      );
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(parts.join(' ')),
@@ -536,23 +776,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Small presentational helpers (visual-only — no state, no side effects)
   // ---------------------------------------------------------------------
 
-  InputDecoration _fieldDecoration({required String label, required bool readOnly}) {
+  InputDecoration _fieldDecoration(
+      {required String label,
+      required bool readOnly,
+      IconData? prefix}) {
     return InputDecoration(
       labelText: label,
       filled: true,
-      fillColor: readOnly ? lightGrayBg : Colors.white,
-      labelStyle: const TextStyle(color: mutedText),
+      fillColor: readOnly ? GisPalette.of(context).bg : Colors.white,
+      labelStyle: TextStyle(color: GisPalette.of(context).muted),
+      prefixIcon: prefix == null
+          ? null
+          : Icon(prefix,
+              size: 19,
+              color: readOnly ? GisPalette.of(context).muted : GisPalette.of(context).primary),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: readOnly ? Colors.transparent : hairline),
+        borderSide: BorderSide(color: readOnly ? Colors.transparent : GisPalette.of(context).hairline),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: gisDeepOlive, width: 1.6),
+        borderSide: BorderSide(color: GisPalette.of(context).primary, width: 1.6),
       ),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: readOnly ? Colors.transparent : hairline),
+        borderSide: BorderSide(color: readOnly ? Colors.transparent : GisPalette.of(context).hairline),
       ),
     );
   }
@@ -564,7 +812,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: hairline),
+        border: Border.all(color: GisPalette.of(context).hairline),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.035),
@@ -580,8 +828,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _cardEyebrow(String text) {
     return Text(
       text.toUpperCase(),
-      style: const TextStyle(
-        color: mutedText,
+      style: TextStyle(
+        color: GisPalette.of(context).muted,
         fontSize: 11,
         fontWeight: FontWeight.w700,
         letterSpacing: 1.2,
@@ -592,18 +840,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: lightGrayBg,
+      backgroundColor: GisPalette.of(context).bg,
       appBar: AppBar(
-        title: const Text(
-          'Settings - Profile Update',
-          style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white, fontSize: 16),
+        title: Text(
+          'Profile Settings',
+          style: TextStyle(
+              fontWeight: FontWeight.w800,
+              color: GisPalette.of(context).ink,
+              fontSize: 17),
         ),
-        centerTitle: true,
-        backgroundColor: gisDeepOlive,
-        foregroundColor: Colors.white,
+        centerTitle: false,
+        backgroundColor: Colors.white,
+        foregroundColor: GisPalette.of(context).ink,
         elevation: 0,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: GisPalette.of(context).hairline),
         ),
       ),
       body: FutureBuilder<Map<String, dynamic>>(
@@ -611,15 +863,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
         builder: (context, snapshot) {
           // 1. Handle Loading State
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(
+            return Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  CircularProgressIndicator(color: gisDeepOlive, strokeWidth: 2.4),
+                  CircularProgressIndicator(color: GisPalette.of(context).primary, strokeWidth: 2.4),
                   SizedBox(height: 16),
                   Text(
                     'Loading profile...',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: mutedText),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: GisPalette.of(context).muted),
                   ),
                 ],
               ),
@@ -634,16 +886,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.error_outline_rounded, color: nationalRed, size: 36),
+                    Icon(Icons.error_outline_rounded, color: GisPalette.of(context).danger, size: 36),
                     const SizedBox(height: 12),
                     Text('Failed to load profile: ${snapshot.error}',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(fontSize: 14, color: darkCharcoal)),
+                        style: TextStyle(fontSize: 14, color: GisPalette.of(context).ink)),
                     const SizedBox(height: 16),
                     ElevatedButton(
                       onPressed: _retry,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: gisDeepOlive,
+                        backgroundColor: GisPalette.of(context).primary,
                         foregroundColor: Colors.white,
                         elevation: 0,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -665,10 +917,96 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _heroChip(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: GisPalette.of(context).gold),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSettingsForm(Map<String, dynamic> profile) {
     // Determine if fields should be read-only based on whether they have existing values.
     // final bool isFullNameReadOnly = profile['name'] != null && (profile['name'] as String).isNotEmpty;
     final bool isEmailReadOnly = profile['email'] != null && (profile['email'] as String).isNotEmpty;
+
+    // Field widgets built once, laid out as a 2-column grid on wide
+    // screens and a single column on narrow ones.
+    final officerIdField = TextFormField(
+      controller: _usernameController,
+      readOnly: true,
+      decoration: _fieldDecoration(
+          label: 'Officer ID',
+          readOnly: true,
+          prefix: Icons.badge_outlined),
+    );
+    final fullNameField = TextFormField(
+      controller: _fullNameController,
+      readOnly: isEmailReadOnly,
+      decoration: _fieldDecoration(
+          label: 'Full Name',
+          readOnly: isEmailReadOnly,
+          prefix: Icons.person_outline_rounded),
+      validator: (value) =>
+          (value == null || value.isEmpty) ? 'Please enter your full name' : null,
+    );
+    final emailField = TextFormField(
+      controller: _emailController,
+      readOnly: isEmailReadOnly,
+      decoration: _fieldDecoration(
+          label: 'Email',
+          readOnly: isEmailReadOnly,
+          prefix: Icons.mail_outline_rounded),
+      validator: (value) {
+        if (value == null || value.isEmpty) {
+          return 'Please enter your email';
+        }
+        if (!RegExp(r'\S+@\S+\.\S+').hasMatch(value)) {
+          return 'Please enter a valid email address';
+        }
+        return null;
+      },
+    );
+    final appIdField = TextFormField(
+      controller: _idController,
+      readOnly: isEmailReadOnly,
+      decoration: _fieldDecoration(
+          label: 'APP ID',
+          readOnly: isEmailReadOnly,
+          prefix: Icons.numbers_rounded),
+      validator: (value) =>
+          (value == null || value.isEmpty) ? 'Please enter your full name' : null,
+    );
+    final deptField = TextFormField(
+      controller: _departmentController,
+      readOnly: isEmailReadOnly,
+      decoration: _fieldDecoration(
+          label: 'Department',
+          readOnly: isEmailReadOnly,
+          prefix: Icons.apartment_rounded),
+      validator: (value) =>
+          (value == null || value.isEmpty) ? '' : null,
+    );
 
     ImageProvider? buildProfileImage() {
       if (_newProfileImage != null) {
@@ -691,109 +1029,185 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return const AssetImage('assets/default_avatar.png');
     }
 
+    final displayName =
+        (profile['fullName'] ?? profile['email'] ?? 'Officer').toString();
+    final displayEmail = (profile['email'] ?? '').toString();
+    final displayId = (profile['username'] ?? profile['officerId'] ?? '')
+        .toString();
+    final displayDept = (profile['department'] ?? '').toString();
+
     return AbsorbPointer(
       absorbing: _isSaving,
       child: Form(
         key: _formKey,
         child: Stack(
           children: [
-            ListView(
-              padding: const EdgeInsets.all(16.0),
-              children: [
-                Center(
-                  child: Stack(
-                    alignment: Alignment.bottomRight,
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1000),
+                child: ListView(
+                  padding: const EdgeInsets.all(16.0),
+                  children: [
+                    // ---- Profile hero ----
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(20, 24, 20, 22),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [
+                        Color(0xFF2E4D2A),
+                        Color(0xFF142412)
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(24),
+                    boxShadow: [
+                      BoxShadow(
+                        color: GisPalette.of(context).primary.withValues(alpha: 0.30),
+                        blurRadius: 22,
+                        offset: const Offset(0, 12),
+                      ),
+                    ],
+                  ),
+                  child: Column(
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(color: ghanaGold, width: 3),
-                        ),
-                        child: CircleAvatar(
-                          radius: 76,
-                          backgroundColor: lightGrayBg,
-                          backgroundImage: buildProfileImage(),
+                      Stack(
+                        alignment: Alignment.bottomRight,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                  color: GisPalette.of(context).gold, width: 3),
+                            ),
+                            child: CircleAvatar(
+                              radius: 56,
+                              backgroundColor: Colors.white,
+                              backgroundImage: buildProfileImage(),
+                            ),
+                          ),
+                          Material(
+                            color: GisPalette.of(context).gold,
+                            shape: const CircleBorder(),
+                            child: InkWell(
+                              onTap: _showImageSourceDialog,
+                              customBorder: const CircleBorder(),
+                              child: const Padding(
+                                padding: EdgeInsets.all(9.0),
+                                child: Icon(Icons.camera_alt,
+                                    color: Color(0xFF142412),
+                                    size: 18),
+                              ),
+                            ),
+                          )
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        displayName,
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 19,
+                          letterSpacing: -0.3,
                         ),
                       ),
-                      Material(
-                        color: gisDeepOlive,
-                        borderRadius: BorderRadius.circular(20),
-                        child: InkWell(
-                          onTap: _showImageSourceDialog,
-                          borderRadius: BorderRadius.circular(20),
-                          child: const Padding(
-                            padding: EdgeInsets.all(8.0),
-                            child: Icon(Icons.camera_alt, color: Colors.white, size: 20),
-                          ),
+                      if (displayEmail.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          displayEmail,
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 13),
                         ),
-                      )
+                      ],
+                      const SizedBox(height: 10),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          if (displayId.isNotEmpty)
+                            _heroChip(Icons.badge_outlined, displayId),
+                          if (displayDept.isNotEmpty)
+                            _heroChip(
+                                Icons.apartment_rounded, displayDept),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      const Text(
+                        "Tap the camera icon to update your photo — it doubles as your face-verification image.",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            color: Colors.white60, fontSize: 11.5),
+                      ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 14),
-                const Text("Tap the camera icon to update your photo",
-                  style: TextStyle(color: mutedText, fontSize: 12.5),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
 
                 _card(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _cardEyebrow("Profile information"),
-                      const SizedBox(height: 14),
-                      // Read-only Username
-                      TextFormField(
-                        controller: _usernameController,
-                        readOnly: true,
-                        decoration: _fieldDecoration(label: 'Officer ID', readOnly: true),
+                      _cardEyebrow("Personal details"),
+                      const SizedBox(height: 4),
+                      Text(
+                        "Fields locked by the system can't be edited here — ask an administrator.",
+                        style:
+                            TextStyle(fontSize: 12, color: GisPalette.of(context).muted),
                       ),
                       const SizedBox(height: 14),
-
-                      // Editable Full Name (only if empty)
-                      TextFormField(
-                        controller: _fullNameController,
-                        readOnly: isEmailReadOnly, // Set readOnly based on initial value
-                        decoration: _fieldDecoration(label: 'Full Name', readOnly: isEmailReadOnly),
-                        validator: (value) => (value == null || value.isEmpty) ? 'Please enter your full name' : null,
-                      ),
+                      officerIdField,
                       const SizedBox(height: 14),
-
-
-                      TextFormField(
-                        controller: _emailController,
-                        readOnly: isEmailReadOnly, // Set readOnly based on initial value
-                        decoration: _fieldDecoration(label: 'Email', readOnly: isEmailReadOnly),
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Please enter your email';
+                      LayoutBuilder(
+                        builder: (ctx, c) {
+                          if (c.maxWidth < 560) {
+                            return Column(
+                              children: [
+                                fullNameField,
+                                const SizedBox(height: 14),
+                                emailField,
+                                const SizedBox(height: 14),
+                                appIdField,
+                                const SizedBox(height: 14),
+                                deptField,
+                              ],
+                            );
                           }
-                          // Basic email validation
-                          if (!RegExp(r'\S+@\S+\.\S+').hasMatch(value)) {
-                            return 'Please enter a valid email address';
-                          }
-                          return null;
+                          return Column(
+                            children: [
+                              Row(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(child: fullNameField),
+                                  const SizedBox(width: 12),
+                                  Expanded(child: emailField),
+                                ],
+                              ),
+                              const SizedBox(height: 14),
+                              Row(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(child: appIdField),
+                                  const SizedBox(width: 12),
+                                  Expanded(child: deptField),
+                                ],
+                              ),
+                            ],
+                          );
                         },
                       ),
-                      const SizedBox(height: 14),
-                      
-                      TextFormField(
-                        controller: _idController,
-                        readOnly: isEmailReadOnly, // Set readOnly based on initial value
-                        decoration: _fieldDecoration(label: 'APP ID', readOnly: isEmailReadOnly),
-                        validator: (value) => (value == null || value.isEmpty) ? 'Please enter your full name' : null,
-                      ),
-                      const SizedBox(height: 14),
-
-                      TextFormField(
-                        controller: _departmentController,
-                        readOnly: isEmailReadOnly, // Set readOnly based on initial value
-                        decoration: _fieldDecoration(label: 'Department', readOnly: isEmailReadOnly),
-                        validator: (value) => (value == null || value.isEmpty) ? '' : null,
-                      ),
-                      const SizedBox(height: 14),
+                      const SizedBox(height: 2),
 
 
                     ],
@@ -803,54 +1217,197 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 16),
 
 
+                // ---- Two-factor authentication (email OTP, default OFF) ----
+                _card(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _cardEyebrow("Two-factor authentication"),
+                      const SizedBox(height: 6),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Enable Two-Factor Authentication',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: GisPalette.of(context).ink)),
+                        subtitle: Text(
+                          _twoFactorBusy
+                              ? 'Sending code…'
+                              : !_twoFactorAllowedByConfig
+                                  ? 'Not enabled by administrator yet — ready once email is configured'
+                                  : _twoFactorEnabled
+                                      ? 'On — a code is emailed at each sign-in'
+                                      : 'Off — get a 6-digit code by email at sign-in',
+                          style: TextStyle(
+                              color: GisPalette.of(context).muted, fontSize: 12.5),
+                        ),
+                        value: _twoFactorEnabled,
+                        onChanged: _twoFactorBusy
+                            ? null
+                            : (v) => _toggleTwoFactor(v, profile),
+                        activeThumbColor: GisPalette.of(context).primary,
+                        secondary: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            Container(
+                              width: 38,
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: _twoFactorEnabled
+                                    ? GisPalette.of(context).oliveTint
+                                    : GisPalette.of(context).bg,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                Icons.mark_email_read_outlined,
+                                color: _twoFactorEnabled
+                                    ? GisPalette.of(context).primary
+                                    : Colors.grey,
+                              ),
+                            ),
+                            if (_twoFactorBusy)
+                              SizedBox(
+                                width: 38,
+                                height: 38,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: GisPalette.of(context).primary),
+                              ),
+                          ],
+                        ),
+                      ),
+                      Text(
+                        'When on, signing in also requires a 6-digit code sent to your profile email (valid 5 minutes). An administrator turns the feature on in System Config once outbound email works.',
+                        style: TextStyle(fontSize: 12, color: GisPalette.of(context).muted),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 16),
+
                 if (_canCheckBiometrics)
                   _card(
-                    child: SwitchListTile(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _cardEyebrow("Security"),
+                        const SizedBox(height: 6),
+                        SwitchListTile(
                       contentPadding: EdgeInsets.zero,
-                      title: const Text('Enable Biometric Login', style: TextStyle(fontWeight: FontWeight.w600, color: darkCharcoal)),
+                      title: Text('Enable Biometric Login', style: TextStyle(fontWeight: FontWeight.w600, color: GisPalette.of(context).ink)),
                       subtitle: Text(
                         _biometricsEnabled
                             ? 'Fingerprint/Face ID'
                             : 'Enable to use fingerprint or face ID instead of password',
-                        style: const TextStyle(color: mutedText, fontSize: 12.5),
+                        style: TextStyle(color: GisPalette.of(context).muted, fontSize: 12.5),
                       ),
                       value: _biometricsEnabled,
                       onChanged: _canCheckBiometrics ? _toggleBiometrics : null,
-                      activeThumbColor: gisDeepOlive,
+                      activeThumbColor: GisPalette.of(context).primary,
                       secondary: Container(
                         width: 38,
                         height: 38,
                         decoration: BoxDecoration(
-                          color: _biometricsEnabled ? oliveTint : lightGrayBg,
+                          color: _biometricsEnabled ? GisPalette.of(context).oliveTint : GisPalette.of(context).bg,
                           shape: BoxShape.circle,
                         ),
                         child: Icon(
                           Icons.fingerprint,
-                          color: _biometricsEnabled ? gisDeepOlive : Colors.grey,
+                          color: _biometricsEnabled ? GisPalette.of(context).primary : Colors.grey,
                         ),
                       ),
                     ),
+                      ],
+                    ),
                   ),
 
-                const SizedBox(height: 24),
+                // ---- App updates (in-place, no reinstall) ----
+                _card(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _cardEyebrow("App updates"),
+                      const SizedBox(height: 6),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: GisPalette.of(context).oliveTint,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.system_update_outlined,
+                            color: GisPalette.of(context).primary,
+                          ),
+                        ),
+                        title: Text(
+                          _currentVersion.isEmpty
+                              ? 'GIS_Attendance'
+                              : 'GIS_Attendance v$_currentVersion',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: GisPalette.of(context).ink),
+                        ),
+                        subtitle: Text(
+                          'Updates install over this app — your data is kept, no uninstall needed.',
+                          style:
+                              TextStyle(color: GisPalette.of(context).muted, fontSize: 12.5),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: _updateChecking
+                            ? SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: GisPalette.of(context).primary),
+                              )
+                            : TextButton.icon(
+                                onPressed: _manualUpdateCheck,
+                                icon: const Icon(Icons.refresh, size: 17),
+                                label:
+                                    const Text('Check for updates'),
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 16),
                 SizedBox(
                   width: double.infinity,
-                  child: ElevatedButton(
+                  child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: gisDeepOlive,
+                      backgroundColor: GisPalette.of(context).primary,
                       foregroundColor: Colors.white,
                       elevation: 0,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                       padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
                     onPressed: () => _updateProfile(profile),
-                    child: const Text('Save Changes', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                    icon: _isSaving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.save_outlined, size: 19),
+                    label: Text(
+                        _isSaving ? 'Saving…' : 'Save Changes',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w700, fontSize: 15)),
                   ),
                 ),
 
                 // _buildVersionHistorySection(),
                 const SizedBox(height: 24),
-              ],
+                  ],
+                ),
+              ),
             ),
             if (_isSaving)
               Container(
