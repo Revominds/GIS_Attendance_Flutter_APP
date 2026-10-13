@@ -45,6 +45,8 @@ class AuthService {
 
   static String get _authLoginUrl => "$_baseUrl/auth/login";
   static String get _authRegisterUrl => "$_baseUrl/auth/register";
+  static String get _sendOtpUrl => "$_baseUrl/auth/send-otp";
+  static String get _verifyOtpUrl => "$_baseUrl/auth/verify-otp";
   static String get _officerUrl => "$_baseUrl/officers";
   static String get _registerFaceUrl => "$_baseUrl/officers/register-face";
 
@@ -484,6 +486,89 @@ class AuthService {
     return ApiResult.failure(
       serverMessageOf(body) ??
           describeHttpError(response.statusCode) ,
+      statusCode: response.statusCode,
+    );
+  }
+
+  /// Server-side contact verification for registration.
+  ///
+  /// When POST /api/auth/register answers that the officer must verify
+  /// their email/phone with a code first, the app drives this flow:
+  /// [sendRegistrationOtp] (re)sends the code via `channel` ("email" or
+  /// "sms"), and [verifyRegistrationOtp] completes the step with the code
+  /// the officer received. `identifier` is the email address when the
+  /// channel is email, otherwise the phone number.
+  Future<ApiResult<void>> sendRegistrationOtp({
+    required String identifier,
+    required String channel,
+  }) async {
+    http.Response response;
+    try {
+      response = await http
+          .post(
+            Uri.parse(_sendOtpUrl),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({"identifier": identifier, "channel": channel}),
+          )
+          .timeout(const Duration(seconds: 20));
+    } catch (e, st) {
+      AppLog.e("AuthService", "sendRegistrationOtp network failure", e, st);
+      return ApiResult.failure(describeNetworkError(e));
+    }
+
+    dynamic body;
+    try {
+      body = response.body.isEmpty ? null : jsonDecode(response.body);
+    } catch (_) {
+      body = null;
+    }
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return ApiResult.success(null,
+          message: serverMessageOf(body) ?? "Code sent.");
+    }
+    AppLog.w("AuthService",
+        "sendRegistrationOtp failed HTTP ${response.statusCode}: ${response.body}");
+    return ApiResult.failure(
+      serverMessageOf(body) ?? describeHttpError(response.statusCode),
+      statusCode: response.statusCode,
+    );
+  }
+
+  Future<ApiResult<void>> verifyRegistrationOtp({
+    required String identifier,
+    required String code,
+  }) async {
+    http.Response response;
+    try {
+      response = await http
+          .post(
+            Uri.parse(_verifyOtpUrl),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode(
+                {"identifier": identifier.trim(), "code": code.trim()}),
+          )
+          .timeout(const Duration(seconds: 20));
+    } catch (e, st) {
+      AppLog.e("AuthService", "verifyRegistrationOtp network failure", e, st);
+      return ApiResult.failure(describeNetworkError(e));
+    }
+
+    dynamic body;
+    try {
+      body = response.body.isEmpty ? null : jsonDecode(response.body);
+    } catch (_) {
+      body = null;
+    }
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return ApiResult.success(null,
+          message: serverMessageOf(body) ?? "Verified.");
+    }
+    AppLog.w("AuthService",
+        "verifyRegistrationOtp failed HTTP ${response.statusCode}: ${response.body}");
+    return ApiResult.failure(
+      serverMessageOf(body) ?? describeHttpError(response.statusCode),
       statusCode: response.statusCode,
     );
   }

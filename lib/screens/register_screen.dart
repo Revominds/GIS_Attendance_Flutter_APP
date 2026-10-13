@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:gis_attendance/services/auth_service.dart';
 import 'package:gis_attendance/services/notification_service.dart';
+import 'package:gis_attendance/screens/registration_verify_screen.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:gis_attendance/theme/gis_palette.dart';
 
@@ -179,6 +180,58 @@ class _RegisterScreenState extends State<RegisterScreen> {
           category: 'Security',
         );
         Navigator.of(context).pop(true);
+      } else if (_isContactVerificationRequired(message)) {
+        // The server created (or is holding) the account pending an
+        // email/phone code — take the officer to the verify screen
+        // instead of a dead-end error banner.
+        setState(() => _loading = false);
+        final verified = await Navigator.of(context).push<bool>(
+          MaterialPageRoute(
+            builder: (_) => RegistrationVerifyScreen(
+              officerId: _staffIdCtrl.text.trim(),
+              email: _emailCtrl.text.trim(),
+              phoneNumber: _phoneNumberCtrl.text.trim(),
+            ),
+          ),
+        );
+        if (!mounted) return;
+        if (verified == true) {
+          // Contact verified — finish what register() skips in this
+          // path: upload the face photo, then report pending approval.
+          setState(() => _loading = true);
+          final faceRes = await _authService.registerFace(
+            officerId: _staffIdCtrl.text.trim(),
+            faceFile: _faceFile!,
+          );
+          if (!mounted) return;
+          setState(() => _loading = false);
+          if (!faceRes.ok) {
+            setState(() {
+              _error =
+                  'Contact verified, but the face photo failed to save: ${faceRes.message} — retry registration or update your photo in Settings.';
+            });
+            return;
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text(
+                  'Registration successful. Your account is pending admin approval before you can log in.'),
+              backgroundColor: GisPalette.of(context).primary,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+          NotificationService.logActivity(
+            'Registration submitted',
+            'Officer ${_staffIdCtrl.text.trim()} verified contact and submitted a registration — pending admin approval.',
+            category: 'Security',
+          );
+          Navigator.of(context).pop(true);
+        } else {
+          setState(() {
+            _error =
+                'Verify the code sent to your email/phone to complete registration. You can retry — your details are kept.';
+          });
+        }
       } else {
         setState(() {
           _error = message;
@@ -194,9 +247,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
+  /// True when the register response is asking for an email/phone code
+  /// (e.g. "Please verify your email or phone number with the code sent
+  /// to you…") rather than reporting a real failure.
+  bool _isContactVerificationRequired(String message) {
+    final lower = message.toLowerCase();
+    return lower.contains('verif') &&
+        (lower.contains('code') ||
+            lower.contains('email') ||
+            lower.contains('phone') ||
+            lower.contains('otp') ||
+            lower.contains('sms'));
+  }
+
   void _goBack() {
-    if (_currentStep > 0) {
-      setState(() {
+    if (_currentStep > 0) {      setState(() {
         _currentStep--;
         _error = null;
       });
