@@ -54,7 +54,17 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> with Si
     super.initState();
     _faceDetector = FaceDetector(
       options: FaceDetectorOptions(
-        performanceMode: FaceDetectorMode.accurate,
+        // Fast mode is more lenient than accurate and doesn't wait on a
+        // downloadable model — accurate silently throws on devices without
+        // Play-services face models, which this screen used to swallow as
+        // "No face found". Keep the threshold low so small/dark faces pass
+        // the local gate; the server (Face++) is the real matcher.
+        performanceMode: FaceDetectorMode.fast,
+        enableLandmarks: false,
+        enableClassification: false,
+        enableContours: false,
+        minFaceSize: 0.1,
+        enableTracking: false,
       ),
     );
 
@@ -69,8 +79,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> with Si
   Future<void> _initializeCamera() async {
     final controller = CameraController(
       widget.camera,
-      ResolutionPreset.medium,
+      ResolutionPreset.high,
       enableAudio: false,
+      imageFormatGroup: ImageFormatGroup.jpeg,
     );
     _controller = controller;
 
@@ -112,34 +123,44 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> with Si
     });
 
     try {
+      // Let auto-exposure/focus settle — a photo grabbed the instant the
+      // button is tapped (or 3s after open) is often dark/blurry and MLKit
+      // returns zero faces for it.
+      await Future.delayed(const Duration(milliseconds: 400));
       final XFile imageFile = await controller.takePicture();
       final file = File(imageFile.path);
 
+      if (!await file.exists() || await file.length() == 0) {
+        throw Exception('Camera returned an empty photo — try again.');
+      }
+
       // 1. On-device presence check (file path = stable MLKit route).
+      // This is ADVISORY only: MLKit misses faces in poor light where the
+      // server (Face++) still matches, and on some devices the detector
+      // throws (missing Play-services model). Neither case should hard-
+      // block verification — the server is the ground truth and reports
+      // "no face" itself when there really isn't one.
       bool faceFound = false;
+      String? detectorError;
       try {
         final faces =
             await _faceDetector.processImage(InputImage.fromFilePath(file.path));
         faceFound = faces.isNotEmpty;
+        debugPrint('local face check: ${faces.length} face(s)');
       } catch (e) {
+        detectorError = e.toString();
         debugPrint('file detect error: $e');
       }
       if (!mounted) return;
 
-      if (!faceFound) {
-        setState(() {
-          _isVerifying = false;
-          _hasFace = false;
-          _debugStatus = 'No face found — retry';
-        });
-        _showRetryDialog(
-            'No face was detected in the photo. Center your face in the circle and try again.');
-        return;
-      }
-
       setState(() {
         _capturedImage = file;
-        _hasFace = true;
+        _hasFace = faceFound;
+        _debugStatus = faceFound
+            ? 'Face found — verifying identity…'
+            : detectorError != null
+                ? 'Local check errored ($detectorError) — asking server…'
+                : 'Local check missed — asking server…';
       });
 
       // 2. 1:1 check against this officer's registered face. On a match
@@ -155,6 +176,11 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> with Si
         return;
       }
 
+      if (!mounted) return;
+      setState(() {
+        _isVerifying = false;
+        _debugStatus = 'Server: ${result.message}';
+      });
       _showRetryDialog(result.message);
     } catch (e) {
       if (!mounted) return;

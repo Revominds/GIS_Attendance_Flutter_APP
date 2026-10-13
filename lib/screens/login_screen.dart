@@ -78,12 +78,12 @@ class _LoginScreenState extends State<LoginScreen> {
           if (credentials != null && credentials.containsKey('username')) {
             storedUsername = credentials['username'] ?? '';
             if (kDebugMode) {
-              print("✅ Loaded username from storage: $storedUsername");
+              print("Loaded username from storage: $storedUsername");
             }
           }
         } catch (e) {
           if (kDebugMode) {
-            print("❌ Error fetching stored credentials: $e");
+            print("Error fetching stored credentials: $e");
           }
         }
       }
@@ -105,7 +105,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } catch (e) {
       if (kDebugMode) {
-        print("❌ Error in _initBiometrics: $e");
+        print("Error in _initBiometrics: $e");
       }
       if (!mounted) return;
       setState(() {
@@ -172,7 +172,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } catch (e) {
       if (kDebugMode) {
-        print("❌ Login error: $e");
+        print("Login error: $e");
       }
       if (!mounted) return;
       setState(() {
@@ -361,7 +361,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } catch (e) {
       if (kDebugMode) {
-        print("❌ Biometric login error: $e");
+        print("Biometric login error: $e");
       }
       if (!mounted) return;
       setState(() {

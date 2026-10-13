@@ -17,7 +17,7 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
   final _broadcast = BroadcastService();
   final _msgCtrl = TextEditingController();
 
-  List<Map<String, dynamic>> _officers = [];
+  List<Map<String, dynamic>> _officers = []; //dynamic officers
   bool _loadingOfficers = true;
   String _audience = 'all';
   bool _sending = false;
